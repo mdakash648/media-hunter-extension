@@ -224,7 +224,52 @@ function openInVLCFallback(url) {
   showToast('▶ VLC Protocol দিয়ে চেষ্টা করছে...');
 }
 
-// সব filtered results VLC তে open করা
+// Episode pattern বের করার helper
+// যেমন: "Loki S01E01 ..." → {prefix: "Loki", ep: "S01E01", rest: "..."}
+function parseEpisodeTitle(title) {
+  if (!title) return null;
+  // S01E01, S01E01E02, E01 ইত্যাদি pattern
+  const epRegex = /^(.*?)[.\s_-]*(S\d{1,3}E\d{1,3}(?:E\d{1,3})?|E\d{2,3})[.\s_-]*(.*)/i;
+  const m = title.match(epRegex);
+  if (!m) return null;
+  return {
+    prefix: m[1].trim(),       // "Loki" বা "Hawkeye"
+    ep: m[2].toUpperCase(),    // "S01E01"
+    rest: m[3].trim()          // বাকি অংশ
+  };
+}
+
+// Combined playlist title তৈরি করা
+// first title থেকে episode বের করে last episode দিয়ে range বানানো
+function buildPlaylistTitle(items) {
+  if (items.length === 0) return 'playlist';
+  if (items.length === 1) {
+    // extension বাদ দিয়ে
+    return (items[0].title || 'media').replace(/\.(mkv|mp4|avi|mov|webm|flac|mp3|m4a)$/i, '');
+  }
+
+  const firstTitle = (items[0].title || '').replace(/\.(mkv|mp4|avi|mov|webm|flac|mp3|m4a)$/i, '');
+  const lastTitle  = (items[items.length - 1].title || '').replace(/\.(mkv|mp4|avi|mov|webm|flac|mp3|m4a)$/i, '');
+
+  const firstParsed = parseEpisodeTitle(firstTitle);
+  const lastParsed  = parseEpisodeTitle(lastTitle);
+
+  if (firstParsed && lastParsed && firstParsed.ep !== lastParsed.ep) {
+    // Separator: title এ dot থাকলে dot, না থাকলে space
+    const sep = firstTitle.includes('.') ? '.' : ' ';
+    // যেমন: "Loki S01E01 - S02E05 1080p WEB-DL..."
+    // first title এ episode এর জায়গায় "S01E01 - S02E05" বসানো
+    const epRange = firstParsed.ep + ' - ' + lastParsed.ep;
+    const combined = firstParsed.prefix + sep + epRange
+      + (firstParsed.rest ? sep + firstParsed.rest : '');
+    return combined;
+  }
+
+  // Episode parse না হলে শুধু first title রাখো
+  return firstTitle || 'playlist';
+}
+
+// সব filtered results একটাই M3U তে
 document.getElementById('playAllVlcBtn').addEventListener('click', () => {
   const filtered = currentFilter === 'ALL'
     ? allResults
@@ -235,14 +280,31 @@ document.getElementById('playAllVlcBtn').addEventListener('click', () => {
     return;
   }
 
-  // একটু delay দিয়ে একটার পর একটা download করা, browser block না করতে
-  filtered.forEach((item, i) => {
-    setTimeout(() => {
-      openInVLC(item.url, item.title);
-    }, i * 400);
+  // সব URL একটা M3U তে
+  const lines = ['#EXTM3U'];
+  filtered.forEach(item => {
+    lines.push('#EXTINF:-1,' + (item.title || 'Media'));
+    lines.push(item.url);
   });
+  const m3uContent = lines.join('\n');
 
-  showToast(`▶ ${filtered.length} টি M3U ডাউনলোড হচ্ছে...`);
+  // Combined title থেকে filename
+  const playlistTitle = buildPlaylistTitle(filtered);
+  const safeTitle = playlistTitle.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim().substring(0, 200);
+  const filename = safeTitle + '.m3u';
+
+  // Download
+  const blob = new Blob([m3uContent], { type: 'audio/x-mpegurl' });
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+
+  showToast('▶ ' + filtered.length + ' টি video → ' + filename);
 });
 
 // Copy all filtered URLs
