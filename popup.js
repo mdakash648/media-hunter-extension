@@ -224,6 +224,27 @@ function openInVLCFallback(url) {
   showToast('▶ VLC Protocol দিয়ে চেষ্টা করছে...');
 }
 
+// সব filtered results VLC তে open করা
+document.getElementById('playAllVlcBtn').addEventListener('click', () => {
+  const filtered = currentFilter === 'ALL'
+    ? allResults
+    : allResults.filter(r => r.type === currentFilter);
+
+  if (filtered.length === 0) {
+    showToast('কোনো media নেই!');
+    return;
+  }
+
+  // একটু delay দিয়ে একটার পর একটা download করা, browser block না করতে
+  filtered.forEach((item, i) => {
+    setTimeout(() => {
+      openInVLC(item.url, item.title);
+    }, i * 400);
+  });
+
+  showToast(`▶ ${filtered.length} টি M3U ডাউনলোড হচ্ছে...`);
+});
+
 // Copy all filtered URLs
 copyAllBtn.addEventListener('click', async () => {
   const filtered = currentFilter === 'ALL'

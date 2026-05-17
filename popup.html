@@ -338,6 +338,22 @@
     }
     .btn-copy-all:hover { background: rgba(0,229,255,0.18); }
 
+    .btn-play-all {
+      flex: 1;
+      padding: 7px;
+      background: rgba(255,190,0,0.08);
+      border: 1px solid rgba(255,190,0,0.3);
+      border-radius: 6px;
+      color: #ffbe00;
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-play-all:hover { background: rgba(255,190,0,0.22); }
+
     .result-count-badge {
       font-family: 'JetBrains Mono', monospace;
       font-size: 10px;
@@ -424,7 +440,8 @@
 
   <!-- Bottom bar -->
   <div class="bottom-bar" id="bottomBar" style="display:none">
-    <button class="btn-copy-all" id="copyAllBtn">📋 সব URL কপি করুন</button>
+    <button class="btn-copy-all" id="copyAllBtn">📋 সব URL কপি</button>
+    <button class="btn-play-all" id="playAllVlcBtn">▶ সব VLC তে চালান</button>
     <div class="result-count-badge" id="filteredCount">0 টি</div>
   </div>
 
