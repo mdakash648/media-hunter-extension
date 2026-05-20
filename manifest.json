@@ -1,15 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Media Hunter",
-  "version": "10.0.0",
-  "description": "Current page থেকে MP4, MKV, MP3 সহ সব media file এর URL খুঁজে বের করে। Developed by : Md Akash",
+  "version": "12.0.0",
+  "description": "Current page থেকে MP4, MKV, MP3 সহ সব media file এর URL খুঁজে বের করে। FTP Server Scan Mode সহ। Developed by : Md Akash",
   "permissions": [
     "activeTab",
     "scripting",
     "tabs",
     "clipboardWrite",
-    "downloads"
+    "downloads",
+    "storage",
+    "alarms"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "<all_urls>"
   ],
@@ -23,12 +28,8 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],

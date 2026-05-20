@@ -1,396 +1,435 @@
 <!DOCTYPE html>
 <html lang="bn">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Media Hunter</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg: #0a0c10;
-      --surface: #111318;
-      --surface2: #1a1d24;
-      --border: #252830;
-      --accent: #00e5ff;
-      --accent2: #ff4081;
-      --accent3: #69ff47;
-      --text: #e8eaf0;
-      --muted: #6b7280;
-      --video: #00e5ff;
-      --audio: #ff4081;
-      --media: #69ff47;
-    }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Media Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0c10;
+  --surface: #111318;
+  --surface2: #1a1d24;
+  --border: #252830;
+  --accent: #00e5ff;
+  --accent2: #ff4081;
+  --accent3: #69ff47;
+  --accent4: #ffbe00;
+  --text: #e8eaf0;
+  --muted: #6b7280;
+  --video: #00e5ff;
+  --audio: #ff4081;
+  --media: #69ff47;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 520px;
+  min-height: 200px;
+  max-height: 640px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Rajdhani', sans-serif;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+/* === MAIN TABS === */
+.main-tabs {
+  display: flex;
+  background: var(--surface);
+  border-bottom: 2px solid var(--border);
+  flex-shrink: 0;
+}
+.main-tab {
+  flex: 1;
+  padding: 10px 8px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.main-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.main-tab:hover:not(.active) { color: var(--text); }
+.main-tab.ftp-tab.active { color: var(--accent4); border-bottom-color: var(--accent4); }
 
-    body {
-      width: 480px;
-      min-height: 200px;
-      max-height: 600px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Rajdhani', sans-serif;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }
+/* === TAB PANELS === */
+.tab-panel { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+.tab-panel.active { display: flex; }
 
-    /* Header */
-    .header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-shrink: 0;
-    }
+/* ===================== MEDIA HUNTER TAB ===================== */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.logo {
+  width: 30px; height: 30px;
+  background: linear-gradient(135deg, var(--accent), #0066ff);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
+}
+.header-text h1 {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 16px; font-weight: 700;
+  color: var(--accent); letter-spacing: 2px; text-transform: uppercase;
+}
+.header-text p { font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+.scan-btn {
+  margin-left: auto;
+  background: var(--accent); color: #000;
+  border: none; padding: 6px 14px;
+  border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+}
+.scan-btn:hover { background: #00b8d4; transform: scale(1.04); }
+.scan-btn:disabled { background: var(--muted); cursor: not-allowed; transform: none; }
 
-    .logo {
-      width: 32px;
-      height: 32px;
-      background: linear-gradient(135deg, var(--accent), #0066ff);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      flex-shrink: 0;
-    }
+.stats-bar {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 14px;
+  display: flex; align-items: center; gap: 14px;
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+}
+.stat { display: flex; align-items: center; gap: 4px; }
+.stat-dot { width: 6px; height: 6px; border-radius: 50%; }
+.dot-video { background: var(--video); }
+.dot-audio { background: var(--audio); }
+.dot-media { background: var(--media); }
+.stat-count { font-weight: 700; color: var(--text); }
+.stat-label { color: var(--muted); }
+.total-count { margin-left: auto; color: var(--accent); font-weight: 700; }
 
-    .header-text h1 {
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 18px;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 2px;
-      text-transform: uppercase;
-    }
+.filters {
+  display: flex; gap: 2px;
+  padding: 7px 14px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.filter-tab {
+  padding: 4px 10px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  border: 1px solid transparent; border-bottom: none;
+  color: var(--muted);
+  font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.filter-tab.active { background: var(--surface2); border-color: var(--border); color: var(--accent); }
+.filter-tab:hover:not(.active) { color: var(--text); }
 
-    .header-text p {
-      font-size: 11px;
-      color: var(--muted);
-      font-family: 'JetBrains Mono', monospace;
-    }
+.media-list {
+  flex: 1; overflow-y: auto; padding: 7px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.media-list::-webkit-scrollbar { width: 4px; }
+.media-list::-webkit-scrollbar-track { background: transparent; }
+.media-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-    .scan-btn {
-      margin-left: auto;
-      background: var(--accent);
-      color: #000;
-      border: none;
-      padding: 7px 16px;
-      border-radius: 6px;
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 700;
-      font-size: 13px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      transition: all 0.2s;
-      flex-shrink: 0;
-    }
+.state-msg {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 8px; padding: 28px; text-align: center;
+}
+.state-icon { font-size: 36px; opacity: 0.3; }
+.state-title { font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: 1px; }
+.state-sub { font-size: 11px; color: var(--muted); opacity: 0.6; font-family: 'JetBrains Mono', monospace; }
 
-    .scan-btn:hover { background: #00b8d4; transform: scale(1.04); }
-    .scan-btn:disabled { background: var(--muted); cursor: not-allowed; transform: none; }
+.spinner {
+  width: 26px; height: 26px;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Stats bar */
-    .stats-bar {
-      background: var(--surface2);
-      border-bottom: 1px solid var(--border);
-      padding: 7px 16px;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      flex-shrink: 0;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-    }
+.media-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 7px; padding: 9px 11px; transition: border-color 0.15s;
+}
+.media-card:hover { border-color: var(--accent); }
+.card-top { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.ext-badge {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700;
+  padding: 2px 6px; border-radius: 4px; letter-spacing: 1px; flex-shrink: 0;
+}
+.badge-VIDEO { background: rgba(0,229,255,0.15); color: var(--video); border: 1px solid rgba(0,229,255,0.3); }
+.badge-AUDIO { background: rgba(255,64,129,0.15); color: var(--audio); border: 1px solid rgba(255,64,129,0.3); }
+.badge-MEDIA { background: rgba(105,255,71,0.15); color: var(--media); border: 1px solid rgba(105,255,71,0.3); }
+.url-text {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
+}
+.card-actions { display: flex; gap: 5px; }
+.btn-copy, .btn-download {
+  flex: 1; padding: 5px 8px; border-radius: 5px; border: 1px solid;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.btn-copy { background: rgba(0,229,255,0.08); border-color: rgba(0,229,255,0.3); color: var(--accent); }
+.btn-copy:hover { background: rgba(0,229,255,0.2); }
+.btn-copy.copied { background: rgba(105,255,71,0.15); border-color: var(--media); color: var(--media); }
+.btn-download { background: rgba(255,64,129,0.08); border-color: rgba(255,64,129,0.3); color: var(--audio); }
+.btn-download:hover { background: rgba(255,64,129,0.2); }
 
-    .stat { display: flex; align-items: center; gap: 5px; }
-    .stat-dot { width: 7px; height: 7px; border-radius: 50%; }
-    .dot-video { background: var(--video); }
-    .dot-audio { background: var(--audio); }
-    .dot-media { background: var(--media); }
+.bottom-bar {
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 7px 11px; display: flex; gap: 7px; flex-shrink: 0;
+}
+.btn-copy-all {
+  flex: 1; padding: 6px;
+  background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.25);
+  border-radius: 6px; color: var(--accent);
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.btn-copy-all:hover { background: rgba(0,229,255,0.18); }
+.btn-play-all {
+  flex: 1; padding: 6px;
+  background: rgba(255,190,0,0.08); border: 1px solid rgba(255,190,0,0.3);
+  border-radius: 6px; color: var(--accent4);
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.btn-play-all:hover { background: rgba(255,190,0,0.22); }
+.result-count-badge {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 6px; color: var(--muted);
+  display: flex; align-items: center;
+}
 
-    .stat-count { font-weight: 700; color: var(--text); }
-    .stat-label { color: var(--muted); }
+/* ===================== FTP SCAN TAB ===================== */
+.ftp-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+.ftp-logo {
+  width: 30px; height: 30px;
+  background: linear-gradient(135deg, var(--accent4), #ff6b00);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
+}
+.ftp-header-text h2 {
+  font-size: 15px; font-weight: 700;
+  color: var(--accent4); letter-spacing: 1px; text-transform: uppercase;
+}
+.ftp-header-text p { font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
 
-    .total-count {
-      margin-left: auto;
-      color: var(--accent);
-      font-weight: 700;
-    }
+.ftp-info-bar {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 14px;
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 10px;
+}
+.ftp-last-scan { color: var(--muted); }
+.ftp-last-scan span { color: var(--accent4); font-weight: 700; }
+.ftp-working-count { margin-left: auto; color: var(--accent3); font-weight: 700; }
 
-    /* Filter tabs */
-    .filters {
-      display: flex;
-      gap: 2px;
-      padding: 8px 16px 0;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-      background: var(--surface);
-    }
+.ftp-controls {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 14px;
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.ftp-scan-btn {
+  background: var(--accent4); color: #000;
+  border: none; padding: 7px 16px; border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.2s;
+}
+.ftp-scan-btn:hover { background: #ffd740; transform: scale(1.04); }
+.ftp-scan-btn:disabled { background: var(--muted); cursor: not-allowed; transform: none; }
+.ftp-stop-btn {
+  background: rgba(255,64,129,0.15); color: var(--accent2);
+  border: 1px solid rgba(255,64,129,0.4); padding: 7px 14px; border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.2s; display: none;
+}
+.ftp-stop-btn:hover { background: rgba(255,64,129,0.3); }
+.ftp-progress-wrap {
+  flex: 1; background: var(--surface2); border-radius: 4px;
+  height: 6px; overflow: hidden; border: 1px solid var(--border);
+}
+.ftp-progress-bar {
+  height: 100%; background: var(--accent4); width: 0%;
+  transition: width 0.3s; border-radius: 4px;
+}
+.ftp-progress-text {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: var(--muted); flex-shrink: 0; min-width: 60px; text-align: right;
+}
 
-    .filter-tab {
-      padding: 5px 12px;
-      border-radius: 6px 6px 0 0;
-      background: transparent;
-      border: 1px solid transparent;
-      border-bottom: none;
-      color: var(--muted);
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 600;
-      font-size: 12px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
+/* Filter tabs for FTP */
+.ftp-filter-bar {
+  display: flex; gap: 2px;
+  padding: 7px 14px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.ftp-filter-tab {
+  padding: 4px 10px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  border: 1px solid transparent; border-bottom: none;
+  color: var(--muted);
+  font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.ftp-filter-tab.active { background: var(--surface2); border-color: var(--border); color: var(--accent4); }
+.ftp-filter-tab:hover:not(.active) { color: var(--text); }
 
-    .filter-tab.active {
-      background: var(--surface2);
-      border-color: var(--border);
-      color: var(--accent);
-    }
+/* FTP Server List */
+.ftp-list {
+  flex: 1; overflow-y: auto; padding: 7px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.ftp-list::-webkit-scrollbar { width: 4px; }
+.ftp-list::-webkit-scrollbar-track { background: transparent; }
+.ftp-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-    .filter-tab:hover:not(.active) { color: var(--text); }
+.ftp-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 11px;
+  display: flex; align-items: center; gap: 8px;
+  transition: border-color 0.15s;
+}
+.ftp-card:hover { border-color: var(--accent4); }
+.ftp-card.status-working { border-color: rgba(105,255,71,0.4); }
+.ftp-card.status-dead { opacity: 0.5; }
+.ftp-card.status-scanning { border-color: rgba(255,190,0,0.4); }
 
-    /* Media list */
-    .media-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
+.ftp-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.ftp-status-dot.working { background: var(--accent3); box-shadow: 0 0 6px var(--accent3); }
+.ftp-status-dot.dead { background: var(--accent2); }
+.ftp-status-dot.scanning { background: var(--accent4); animation: pulse 1s ease-in-out infinite; }
+.ftp-status-dot.pending { background: var(--muted); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-    .media-list::-webkit-scrollbar { width: 4px; }
-    .media-list::-webkit-scrollbar-track { background: transparent; }
-    .media-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.ftp-card-url {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: var(--text); flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ftp-card-status {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  padding: 2px 6px; border-radius: 3px; flex-shrink: 0;
+}
+.ftp-card-status.working { background: rgba(105,255,71,0.15); color: var(--accent3); border: 1px solid rgba(105,255,71,0.3); }
+.ftp-card-status.dead { background: rgba(255,64,129,0.1); color: var(--accent2); border: 1px solid rgba(255,64,129,0.2); }
+.ftp-card-status.scanning { background: rgba(255,190,0,0.15); color: var(--accent4); border: 1px solid rgba(255,190,0,0.3); }
+.ftp-card-status.pending { background: rgba(107,114,128,0.1); color: var(--muted); border: 1px solid rgba(107,114,128,0.2); }
 
-    /* Empty / loading states */
-    .state-msg {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 32px;
-      text-align: center;
-    }
+.ftp-visit-btn {
+  padding: 4px 10px; border-radius: 4px;
+  background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.25);
+  color: var(--accent); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer; transition: all 0.15s;
+  flex-shrink: 0;
+}
+.ftp-visit-btn:hover { background: rgba(0,229,255,0.2); }
 
-    .state-icon { font-size: 40px; opacity: 0.3; }
-    .state-title { font-size: 15px; font-weight: 700; color: var(--muted); letter-spacing: 1px; }
-    .state-sub { font-size: 12px; color: var(--muted); opacity: 0.6; font-family: 'JetBrains Mono', monospace; }
+/* FTP Bottom bar */
+.ftp-bottom-bar {
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 7px 11px; display: flex; gap: 7px; flex-shrink: 0; align-items: center;
+}
+.btn-visit-all {
+  flex: 1; padding: 6px;
+  background: rgba(255,190,0,0.1); border: 1px solid rgba(255,190,0,0.3);
+  border-radius: 6px; color: var(--accent4);
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.btn-visit-all:hover { background: rgba(255,190,0,0.22); }
+.btn-clear-ftp {
+  padding: 6px 12px;
+  background: rgba(255,64,129,0.08); border: 1px solid rgba(255,64,129,0.25);
+  border-radius: 6px; color: var(--accent2);
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.btn-clear-ftp:hover { background: rgba(255,64,129,0.18); }
+.ftp-result-badge {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 6px; color: var(--muted);
+  display: flex; align-items: center;
+}
 
-    /* Spinner */
-    .spinner {
-      width: 28px; height: 28px;
-      border: 3px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Media Card */
-    .media-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      transition: border-color 0.15s;
-    }
+/* Background scanning badge */
+.bg-scan-badge {
+  display: none;
+  align-items: center; gap: 5px;
+  background: rgba(255,190,0,0.12);
+  border: 1px solid rgba(255,190,0,0.4);
+  border-radius: 4px; padding: 2px 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: var(--accent4); font-weight: 700;
+  animation: bgpulse 1.5s ease-in-out infinite;
+}
+.bg-scan-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent4);
+}
+@keyframes bgpulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
-    .media-card:hover { border-color: var(--accent); }
-
-    .card-top {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 7px;
-    }
-
-    .ext-badge {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 4px;
-      letter-spacing: 1px;
-      flex-shrink: 0;
-    }
-
-    .badge-VIDEO { background: rgba(0,229,255,0.15); color: var(--video); border: 1px solid rgba(0,229,255,0.3); }
-    .badge-AUDIO { background: rgba(255,64,129,0.15); color: var(--audio); border: 1px solid rgba(255,64,129,0.3); }
-    .badge-MEDIA { background: rgba(105,255,71,0.15); color: var(--media); border: 1px solid rgba(105,255,71,0.3); }
-
-    .url-text {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      flex: 1;
-    }
-
-    .card-title-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 5px;
-    }
-
-    .card-title {
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 14px;
-      font-weight: 700;
-      color: var(--text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      flex: 1;
-      letter-spacing: 0.3px;
-    }
-
-    .card-actions {
-      display: flex;
-      gap: 6px;
-    }
-
-    .btn-copy, .btn-download {
-      flex: 1;
-      padding: 6px 10px;
-      border-radius: 5px;
-      border: 1px solid;
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-    }
-
-    .btn-copy {
-      background: rgba(0,229,255,0.08);
-      border-color: rgba(0,229,255,0.3);
-      color: var(--accent);
-    }
-    .btn-copy:hover { background: rgba(0,229,255,0.2); }
-    .btn-copy.copied { background: rgba(105,255,71,0.15); border-color: var(--media); color: var(--media); }
-
-    .btn-download {
-      background: rgba(255,64,129,0.08);
-      border-color: rgba(255,64,129,0.3);
-      color: var(--audio);
-    }
-    .btn-download:hover { background: rgba(255,64,129,0.2); }
-
-    .btn-play {
-      flex: 0 0 auto;
-      padding: 6px 12px;
-      border-radius: 5px;
-      border: 1px solid rgba(255,190,0,0.4);
-      background: rgba(255,190,0,0.08);
-      color: #ffbe00;
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      white-space: nowrap;
-    }
-    .btn-play:hover { background: rgba(255,190,0,0.22); border-color: rgba(255,190,0,0.7); }
-
-    /* Copy all button */
-    .bottom-bar {
-      background: var(--surface);
-      border-top: 1px solid var(--border);
-      padding: 8px 12px;
-      display: flex;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-
-    .btn-copy-all {
-      flex: 1;
-      padding: 7px;
-      background: rgba(0,229,255,0.08);
-      border: 1px solid rgba(0,229,255,0.25);
-      border-radius: 6px;
-      color: var(--accent);
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .btn-copy-all:hover { background: rgba(0,229,255,0.18); }
-
-    .btn-play-all {
-      flex: 1;
-      padding: 7px;
-      background: rgba(255,190,0,0.08);
-      border: 1px solid rgba(255,190,0,0.3);
-      border-radius: 6px;
-      color: #ffbe00;
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 700;
-      font-size: 12px;
-      letter-spacing: 1px;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .btn-play-all:hover { background: rgba(255,190,0,0.22); }
-
-    .result-count-badge {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 2px 7px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-    }
-
-    /* Toast */
-    .toast {
-      position: fixed;
-      bottom: 50px;
-      left: 50%;
-      transform: translateX(-50%) translateY(20px);
-      background: var(--accent3);
-      color: #000;
-      padding: 6px 18px;
-      border-radius: 20px;
-      font-family: 'Rajdhani', sans-serif;
-      font-weight: 700;
-      font-size: 13px;
-      opacity: 0;
-      transition: all 0.3s;
-      pointer-events: none;
-      z-index: 999;
-      white-space: nowrap;
-    }
-    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  </style>
+/* Toast */
+.toast {
+  position: fixed; bottom: 48px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--accent3); color: #000;
+  padding: 5px 16px; border-radius: 20px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px;
+  opacity: 0; transition: all 0.3s; pointer-events: none; z-index: 999; white-space: nowrap;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
 </head>
 <body>
 
-  <!-- Header -->
+<!-- MAIN NAVIGATION TABS -->
+<div class="main-tabs">
+  <button class="main-tab active" id="tabMediaBtn">🎯 মিডিয়া হান্টার</button>
+  <button class="main-tab ftp-tab" id="tabFtpBtn">🖥️ FTP সার্ভার স্ক্যান</button>
+</div>
+
+<!-- ===== MEDIA HUNTER PANEL ===== -->
+<div class="tab-panel active" id="panelMedia">
   <div class="header">
     <div class="logo">🎯</div>
     <div class="header-text">
@@ -400,27 +439,13 @@
     <button class="scan-btn" id="scanBtn">⚡ স্ক্যান</button>
   </div>
 
-  <!-- Stats -->
   <div class="stats-bar" id="statsBar" style="display:none">
-    <div class="stat">
-      <div class="stat-dot dot-video"></div>
-      <span class="stat-count" id="videoCount">0</span>
-      <span class="stat-label">VIDEO</span>
-    </div>
-    <div class="stat">
-      <div class="stat-dot dot-audio"></div>
-      <span class="stat-count" id="audioCount">0</span>
-      <span class="stat-label">AUDIO</span>
-    </div>
-    <div class="stat">
-      <div class="stat-dot dot-media"></div>
-      <span class="stat-count" id="mediaCount">0</span>
-      <span class="stat-label">OTHER</span>
-    </div>
+    <div class="stat"><div class="stat-dot dot-video"></div><span class="stat-count" id="videoCount">0</span><span class="stat-label">VIDEO</span></div>
+    <div class="stat"><div class="stat-dot dot-audio"></div><span class="stat-count" id="audioCount">0</span><span class="stat-label">AUDIO</span></div>
+    <div class="stat"><div class="stat-dot dot-media"></div><span class="stat-count" id="mediaCount">0</span><span class="stat-label">OTHER</span></div>
     <div class="total-count" id="totalCount">মোট: 0</div>
   </div>
 
-  <!-- Filter tabs -->
   <div class="filters" id="filterBar" style="display:none">
     <button class="filter-tab active" data-filter="ALL">সব</button>
     <button class="filter-tab" data-filter="VIDEO">ভিডিও</button>
@@ -428,9 +453,7 @@
     <button class="filter-tab" data-filter="MEDIA">অন্যান্য</button>
   </div>
 
-  <!-- Content area -->
   <div id="content" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
-    <!-- Initial state -->
     <div class="state-msg" id="initState">
       <div class="state-icon">🔍</div>
       <div class="state-title">মিডিয়া খোঁজা হয়নি</div>
@@ -438,16 +461,63 @@
     </div>
   </div>
 
-  <!-- Bottom bar -->
   <div class="bottom-bar" id="bottomBar" style="display:none">
     <button class="btn-copy-all" id="copyAllBtn">📋 সব URL কপি</button>
     <button class="btn-play-all" id="playAllVlcBtn">▶ সব VLC তে চালান</button>
     <div class="result-count-badge" id="filteredCount">0 টি</div>
   </div>
+</div>
 
-  <!-- Toast -->
-  <div class="toast" id="toast"></div>
+<!-- ===== FTP SCAN PANEL ===== -->
+<div class="tab-panel" id="panelFtp">
+  <div class="ftp-header">
+    <div class="ftp-logo">🖥️</div>
+    <div class="ftp-header-text">
+      <h2>FTP Server Scan</h2>
+      <p>সার্ভার লিস্ট থেকে working link খুঁজে বের করুন</p>
+    </div>
+  </div>
 
-  <script src="popup.js"></script>
+  <div class="ftp-info-bar">
+    <span class="ftp-last-scan" id="ftpLastScan">শেষ স্ক্যান: <span>কখনো না</span></span>
+    <span class="ftp-working-count" id="ftpWorkingCount">✅ 0 working</span>
+    <span class="bg-scan-badge" id="ftpScanningBadge"><div class="bg-scan-dot"></div>Background এ চলছে...</span>
+  </div>
+
+  <div class="ftp-controls">
+    <button class="ftp-scan-btn" id="ftpScanBtn">🔍 স্ক্যান শুরু করুন</button>
+    <button class="ftp-stop-btn" id="ftpStopBtn">⏹ বন্ধ করুন</button>
+    <div class="ftp-progress-wrap">
+      <div class="ftp-progress-bar" id="ftpProgressBar"></div>
+    </div>
+    <span class="ftp-progress-text" id="ftpProgressText">0/0</span>
+  </div>
+
+  <div class="ftp-filter-bar">
+    <button class="ftp-filter-tab active" data-ftp-filter="ALL">সব</button>
+    <button class="ftp-filter-tab" data-ftp-filter="WORKING">✅ Working</button>
+    <button class="ftp-filter-tab" data-ftp-filter="DEAD">❌ Dead</button>
+    <button class="ftp-filter-tab" data-ftp-filter="PENDING">⏳ Pending</button>
+  </div>
+
+  <div class="ftp-list" id="ftpList">
+    <div class="state-msg" id="ftpInitState">
+      <div class="state-icon">🖥️</div>
+      <div class="state-title">সার্ভার স্ক্যান করা হয়নি</div>
+      <div class="state-sub">🔍 স্ক্যান বাটন চাপুন</div>
+    </div>
+  </div>
+
+  <div class="ftp-bottom-bar" id="ftpBottomBar">
+    <button class="btn-visit-all" id="ftpVisitAllBtn">🌐 সব Working লিংক ভিজিট করুন</button>
+    <button class="btn-clear-ftp" id="ftpClearBtn">🗑 ক্লিয়ার</button>
+    <div class="ftp-result-badge" id="ftpResultBadge">0 টি</div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script src="popup.js"></script>
 </body>
 </html>
