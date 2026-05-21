@@ -10,6 +10,7 @@
     "clipboardWrite",
     "downloads",
     "storage",
+    "unlimitedStorage",
     "alarms"
   ],
   "background": {

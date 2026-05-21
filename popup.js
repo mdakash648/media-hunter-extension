@@ -357,29 +357,96 @@ function renderSearchResults(results, query, meta = {}) {
 let ftpCurrentFilter = 'ALL';
 let ftpResultsCache = {};
 
-function initFtpPanel() {
-  chrome.runtime.sendMessage({ action: 'ftpGetStatus' }, (resp) => {
-    if (chrome.runtime.lastError || !resp) {
-      loadFtpFromStorage();
+function applyFtpSavedData(data) {
+  if (!data) return false;
+  const results = data.results || {};
+  if (!Object.keys(results).length) return false;
+  ftpResultsCache = results;
+  if (data.lastScan) {
+    const d = new Date(data.lastScan);
+    document.getElementById('ftpLastScan').innerHTML =
+      `শেষ স্ক্যান: <span>${d.toLocaleDateString('bn-BD')} ${d.toLocaleTimeString('bn-BD')}</span>`;
+  }
+  const total = data.servers?.length || Object.keys(results).length;
+  const done = Object.values(results).filter(r => r.status !== 'pending' && r.status !== 'scanning').length;
+  updateFtpUI(false, done, total);
+  renderFtpList();
+  return true;
+}
+
+function applyFtpCompactWorking(compact) {
+  if (!compact) return false;
+  const working = compact.urls || [];
+  const servers = compact.allServers?.length ? compact.allServers : working;
+  if (!servers.length) return false;
+
+  const workingSet = new Set(working);
+  ftpResultsCache = {};
+  servers.forEach(url => {
+    ftpResultsCache[url] = { status: workingSet.has(url) ? 'working' : 'dead' };
+  });
+  if (compact.lastScan || compact.savedAt) {
+    const d = new Date(compact.lastScan || compact.savedAt);
+    document.getElementById('ftpLastScan').innerHTML =
+      `শেষ স্ক্যান: <span>${d.toLocaleDateString('bn-BD')} ${d.toLocaleTimeString('bn-BD')}</span>`;
+  }
+  updateFtpUI(false, list.length, list.length);
+  renderFtpList();
+  return true;
+}
+
+/** Android/Kiwi: popup সরাসরি storage পড়ে — background memory খালি থাকলেও কাজ করে */
+function loadFtpDirectFromStorage(callback) {
+  chrome.storage.local.get(['ftpScanData', 'ftpWorkingServers'], (data) => {
+    if (chrome.runtime.lastError) {
+      callback(false);
       return;
     }
-    ftpResultsCache = resp.results || {};
-    updateFtpUI(resp.scanning, resp.done || 0, resp.total || 0);
-    renderFtpList();
+    if (applyFtpSavedData(data.ftpScanData)) {
+      callback(true);
+      return;
+    }
+    if (applyFtpCompactWorking(data.ftpWorkingServers)) {
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+}
+
+function initFtpPanel() {
+  loadFtpDirectFromStorage((directOk) => {
+    if (directOk) return;
+
+    chrome.runtime.sendMessage({ action: 'ftpGetStatus' }, (resp) => {
+      if (chrome.runtime.lastError || !resp) {
+        loadFtpFromStorage();
+        return;
+      }
+      const results = resp.results || {};
+      const hasData = Object.keys(results).length > 0;
+      if (!hasData) {
+        loadFtpFromStorage();
+        return;
+      }
+      ftpResultsCache = results;
+      if (resp.lastScan) {
+        const d = new Date(resp.lastScan);
+        document.getElementById('ftpLastScan').innerHTML =
+          `শেষ স্ক্যান: <span>${d.toLocaleDateString('bn-BD')} ${d.toLocaleTimeString('bn-BD')}</span>`;
+      }
+      updateFtpUI(resp.scanning, resp.done || 0, resp.total || 0);
+      renderFtpList();
+    });
   });
 }
 
 function loadFtpFromStorage() {
-  chrome.runtime.sendMessage({ action: 'ftpLoadSaved' }, (resp) => {
-    if (resp && resp.data) {
-      ftpResultsCache = resp.data.results || {};
-      if (resp.data.lastScan) {
-        const d = new Date(resp.data.lastScan);
-        document.getElementById('ftpLastScan').innerHTML =
-          `শেষ স্ক্যান: <span>${d.toLocaleDateString('bn-BD')} ${d.toLocaleTimeString('bn-BD')}</span>`;
-      }
-      renderFtpList();
-    }
+  loadFtpDirectFromStorage((ok) => {
+    if (ok) return;
+    chrome.runtime.sendMessage({ action: 'ftpLoadSaved' }, (resp) => {
+      if (resp?.data) applyFtpSavedData(resp.data);
+    });
   });
 }
 
