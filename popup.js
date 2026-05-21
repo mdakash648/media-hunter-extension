@@ -34,6 +34,15 @@ async function ensureContentScript(tabId) {
   }).catch(() => {});
 }
 
+function safeDecode(str) {
+  if (str == null || str === '') return '';
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+}
+
 // ===========================
 // MEDIA HUNTER
 // ===========================
@@ -49,24 +58,44 @@ function escAttr(s) {
 }
 
 function sanitizeFilename(name) {
-  return String(name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().substring(0, 180) || 'media';
+  return String(name)
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.+$/, '')
+    .substring(0, 180) || 'media';
 }
 
 function getMediaDisplayName(item) {
   const raw = item.name || item.url.split('/').pop().split('?')[0] || '';
-  try {
-    return decodeURIComponent(raw).replace(/\.[^.]+$/, '');
-  } catch {
-    return raw.replace(/\.[^.]+$/, '');
-  }
+  return safeDecode(raw).replace(/\.[^.]+$/, '') || raw;
 }
 
-/** M3U filename: FROM.TV.S01E01 - S01E06.Long.Days (first + last media name) */
+function getEpisodeSortKey(name) {
+  const m = name.match(/[Ss](\d{1,2})[Ee](\d{1,2})/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 10000 + parseInt(m[2], 10);
+}
+
+/** প্রথম–শেষ এপিসোড অনুযায়ী সাজানো (M3U নাম ও প্লেলিস্ট অর্ডার) */
+function sortMediaForPlaylist(items) {
+  return [...items].sort((a, b) => {
+    const na = getMediaDisplayName(a);
+    const nb = getMediaDisplayName(b);
+    const ka = getEpisodeSortKey(na);
+    const kb = getEpisodeSortKey(nb);
+    if (ka != null && kb != null) return ka - kb;
+    return na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' });
+  });
+}
+
+/** M3U filename: From.S01E01 - S04E05.Long.Days.Journey... (first + last video name) */
 function buildM3uPlaylistFilename(items) {
   if (!items.length) return 'media-hunter-playlist';
-  const first = getMediaDisplayName(items[0]);
-  const last = getMediaDisplayName(items[items.length - 1]);
-  if (items.length === 1) return sanitizeFilename(first);
+  const sorted = sortMediaForPlaylist(items);
+  const first = getMediaDisplayName(sorted[0]);
+  const last = getMediaDisplayName(sorted[sorted.length - 1]);
+  if (sorted.length === 1) return sanitizeFilename(first);
 
   const epPattern = /[Ss]\d{1,2}[Ee]\d{1,2}/;
   const firstMatch = first.match(epPattern);
@@ -103,9 +132,10 @@ function updateBottomBarState() {
 }
 
 function buildM3uContent(items) {
+  const sorted = sortMediaForPlaylist(items);
   const lines = ['#EXTM3U'];
-  items.forEach((item, i) => {
-    const title = (item.name || item.url.split('/').pop() || `Track ${i + 1}`).replace(/,/g, ' ');
+  sorted.forEach((item, i) => {
+    const title = getMediaDisplayName(item).replace(/,/g, ' ') || `Track ${i + 1}`;
     lines.push(`#EXTINF:-1,${title}`);
     lines.push(item.url);
   });
@@ -117,16 +147,34 @@ function downloadM3uFile(items, baseName = 'media-hunter-playlist') {
     showToast('কোনো media নেই');
     return;
   }
-  const blob = new Blob([buildM3uContent(items)], { type: 'application/vnd.apple.mpegurl;charset=utf-8' });
+
+  const filename = `${sanitizeFilename(baseName)}.m3u`;
+  const content = buildM3uContent(items);
+  const blob = new Blob([content], { type: 'application/vnd.apple.mpegurl;charset=utf-8' });
   const blobUrl = URL.createObjectURL(blob);
-  chrome.downloads.download({ url: blobUrl, filename: `${baseName}.m3u`, saveAs: false }, () => {
-    if (chrome.runtime.lastError) {
-      showToast('⚠️ M3U ডাউনলোড ব্যর্থ');
-    } else {
-      showToast(`✅ ${items.length} টি লিংক M3U ফাইলে যোগ হয়েছে`);
-    }
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-  });
+
+  // chrome.downloads + blob: URL → Chrome অনেক সময় UUID নাম দেয়; <a download> সঠিক নাম দেয়
+  try {
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast(`✅ ${items.length} টি — ${filename}`);
+  } catch {
+    const dataUrl = `data:application/vnd.apple.mpegurl;charset=utf-8,${encodeURIComponent(content)}`;
+    chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, () => {
+      if (chrome.runtime.lastError) {
+        showToast('⚠️ M3U ডাউনলোড ব্যর্থ');
+      } else {
+        showToast(`✅ ${items.length} টি — ${filename}`);
+      }
+    });
+  }
+
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
 }
 
 function downloadMediaUrl(item, index = 0) {
@@ -307,7 +355,7 @@ function renderSearchResults(results, query, meta = {}) {
     let displayName = item.text || '';
     try {
       const u = new URL(item.url);
-      const parts = decodeURIComponent(u.pathname).split('/').filter(Boolean);
+      const parts = safeDecode(u.pathname).split('/').filter(Boolean);
       displayName = parts[parts.length - 1] || displayName;
     } catch {}
 
@@ -576,7 +624,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('playAllVlcBtn').addEventListener('click', () => {
-    const filtered = getFilteredMedia();
+    const filtered = sortMediaForPlaylist(getFilteredMedia());
     if (!filtered.length) { showToast('কোনো media নেই'); return; }
     downloadM3uFile(filtered, buildM3uPlaylistFilename(filtered));
   });

@@ -16,6 +16,34 @@ const DEEP_SEARCH = {
   maxResults: 300
 };
 
+/** decodeURIComponent safe — invalid % (যেমন 100% বা ভাঙা encoding) এ URI malformed এড়ায় */
+function safeDecode(str) {
+  if (str == null || str === '') return '';
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    try {
+      return str.replace(/%(?:[0-9A-Fa-f]{2})+/g, (seq) => {
+        try { return decodeURIComponent(seq); } catch { return seq; }
+      });
+    } catch {
+      return str;
+    }
+  }
+}
+
+/** পুরো URL decode না করে শুধু path/search — FTP লিংকে নিরাপদ */
+function hrefSearchText(href) {
+  try {
+    const u = new URL(href);
+    const path = safeDecode(u.pathname);
+    const search = safeDecode(u.search);
+    return `${u.hostname}${path}${search}`;
+  } catch {
+    return safeDecode(href);
+  }
+}
+
 function classifyUrl(url) {
   const lower = url.toLowerCase().split('?')[0];
   const ext = lower.split('.').pop();
@@ -29,7 +57,7 @@ function extractFilename(url) {
   try {
     const path = new URL(url).pathname;
     const name = path.split('/').pop();
-    return decodeURIComponent(name) || url;
+    return safeDecode(name) || url;
   } catch { return url; }
 }
 
@@ -91,7 +119,7 @@ function isFolderLink(href) {
 }
 
 function matchesQuery(text, href, q) {
-  const searchIn = (text + ' ' + decodeURIComponent(href)).toLowerCase();
+  const searchIn = (safeDecode(text) + ' ' + hrefSearchText(href)).toLowerCase();
   return searchIn.includes(q);
 }
 
@@ -135,61 +163,67 @@ function collectLinksFromHtml(html, baseUrl, q, rootUrl, depth, results, seenRes
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
   doc.querySelectorAll('a[href]').forEach(a => {
-    const rawHref = a.getAttribute('href');
-    if (!rawHref) return;
-
-    let href;
     try {
-      href = new URL(rawHref, baseUrl).href;
-    } catch {
-      return;
-    }
+      const rawHref = a.getAttribute('href');
+      if (!rawHref) return;
 
-    const rawText = (a.textContent || '').trim();
-    if (!rawText || href.startsWith('javascript') || href.startsWith('mailto:')) return;
-    if (!isUnderRoot(href, rootUrl)) return;
-    if (isParentLink(href, rawText)) return;
-
-    const text = decodeURIComponent(rawText);
-    const hrefDecoded = decodeURIComponent(href);
-
-    if (matchesQuery(text, hrefDecoded, q) && !seenResults.has(href)) {
-      seenResults.add(href);
-      results.push(makeSearchResult(href, text, depth));
-    }
-
-    if (isFolderLink(href)) {
-      const folderUrl = normalizeDirUrl(href);
-      if (!visitedFolders.has(folderUrl) && depth + 1 <= DEEP_SEARCH.maxDepth) {
-        visitedFolders.add(folderUrl);
-        queue.push({ url: folderUrl, depth: depth + 1 });
+      let href;
+      try {
+        href = new URL(rawHref, baseUrl).href;
+      } catch {
+        return;
       }
+
+      const rawText = (a.textContent || '').trim();
+      if (!rawText || href.startsWith('javascript') || href.startsWith('mailto:')) return;
+      if (!isUnderRoot(href, rootUrl)) return;
+      if (isParentLink(href, rawText)) return;
+
+      const text = safeDecode(rawText);
+
+      if (matchesQuery(text, href, q) && !seenResults.has(href)) {
+        seenResults.add(href);
+        results.push(makeSearchResult(href, text, depth));
+      }
+
+      if (isFolderLink(href)) {
+        const folderUrl = normalizeDirUrl(href);
+        if (!visitedFolders.has(folderUrl) && depth + 1 <= DEEP_SEARCH.maxDepth) {
+          visitedFolders.add(folderUrl);
+          queue.push({ url: folderUrl, depth: depth + 1 });
+        }
+      }
+    } catch {
+      /* একটা খারাপ লিংক — বাকি সার্চ চালু */
     }
   });
 }
 
 function collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults, queue, visitedFolders) {
   document.querySelectorAll('a[href]').forEach(a => {
-    const href = a.href;
-    const rawText = (a.textContent || '').trim();
-    if (!href || !rawText || href.startsWith('javascript')) return;
-    if (!isUnderRoot(href, rootUrl)) return;
-    if (isParentLink(href, rawText)) return;
+    try {
+      const href = a.href;
+      const rawText = (a.textContent || '').trim();
+      if (!href || !rawText || href.startsWith('javascript')) return;
+      if (!isUnderRoot(href, rootUrl)) return;
+      if (isParentLink(href, rawText)) return;
 
-    const text = decodeURIComponent(rawText);
-    const hrefDecoded = decodeURIComponent(href);
+      const text = safeDecode(rawText);
 
-    if (matchesQuery(text, hrefDecoded, q) && !seenResults.has(href)) {
-      seenResults.add(href);
-      results.push(makeSearchResult(href, text, depth));
-    }
-
-    if (isFolderLink(href)) {
-      const folderUrl = normalizeDirUrl(href);
-      if (!visitedFolders.has(folderUrl) && depth + 1 <= DEEP_SEARCH.maxDepth) {
-        visitedFolders.add(folderUrl);
-        queue.push({ url: folderUrl, depth: depth + 1 });
+      if (matchesQuery(text, href, q) && !seenResults.has(href)) {
+        seenResults.add(href);
+        results.push(makeSearchResult(href, text, depth));
       }
+
+      if (isFolderLink(href)) {
+        const folderUrl = normalizeDirUrl(href);
+        if (!visitedFolders.has(folderUrl) && depth + 1 <= DEEP_SEARCH.maxDepth) {
+          visitedFolders.add(folderUrl);
+          queue.push({ url: folderUrl, depth: depth + 1 });
+        }
+      }
+    } catch {
+      /* skip malformed link */
     }
   });
 }
@@ -273,16 +307,18 @@ function searchInPage(query) {
   const seen = new Set();
 
   document.querySelectorAll('a[href]').forEach(a => {
-    const href = a.href;
-    const rawText = (a.textContent || '').trim();
-    const text = decodeURIComponent(rawText);
-    const hrefDecoded = decodeURIComponent(href);
+    try {
+      const href = a.href;
+      const rawText = (a.textContent || '').trim();
+      if (!href || href.startsWith('javascript') || !rawText) return;
 
-    if (!href || href.startsWith('javascript') || !rawText) return;
-
-    if (matchesQuery(text, hrefDecoded, q) && !seen.has(href)) {
-      seen.add(href);
-      results.push(makeSearchResult(href, text, 0));
+      const text = safeDecode(rawText);
+      if (matchesQuery(text, href, q) && !seen.has(href)) {
+        seen.add(href);
+        results.push(makeSearchResult(href, text, 0));
+      }
+    } catch {
+      /* skip */
     }
   });
 
