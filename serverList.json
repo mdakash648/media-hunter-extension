@@ -1,6 +1,9 @@
 {
     "urls": [
-        "http://103.103.239.66/",
+        "http://circleftp.net/",
+        "http://ftp4.circleftp.net/",
+        "http://hd.circleftp.net/",
+        "https://fibwatch.com/",
         "http://alphamediazone.com/moviedom/",
         "http://172.127.27.102/",
         "http://103.135.134.226/",
@@ -16,9 +19,7 @@
         "http://12.1.1.1/",
         "http://103.87.212.46",
         "http://beeflix.biz/",
-        "http://bdbroadband.com/ftp/",
         "http://www.bdfun.club/",
-        "http://bdiptv.com/",
         "http://45.120.114.222/",
         "http://103.229.18.142/",
         "http://103.114.36.14/",
@@ -36,7 +37,6 @@
         "http://www.cinebioscope.com/",
         "http://cinemabazar.net/",
         "http://15.1.1.1/",
-        "http://circleftp.net/",
         "http://203.83.177.225/",
         "http://144.48.110.190:8080/",
         "http://crazyctg.com/",
@@ -213,9 +213,7 @@
         "http://server4.ftpbd.net/",
         "http://15.1.1.4/",
         "http://15.1.1.5/",
-        "http://ftp4.circleftp.net/",
         "http://15.1.1.6/",
-        "http://hd.circleftp.net/",
         "http://172.16.50.5",
         "https://samftp.com",
         "http://103.153.175.254",
@@ -1394,6 +1392,7 @@
         "https://tsports.site",
         "https://tv.nbox.live",
         "https://tv.rangdhanu.live",
-        "https://www6.fmovies.se"
+        "https://www6.fmovies.se",
+        "http://10.10.10.3/"
     ]
 }

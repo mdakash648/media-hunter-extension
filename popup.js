@@ -3,14 +3,17 @@
 // ===========================
 function switchMainTab(tab) {
   document.getElementById('panelMedia').classList.toggle('active', tab === 'media');
+  document.getElementById('panelFtpSearch').classList.toggle('active', tab === 'ftpSearch');
   document.getElementById('panelFtp').classList.toggle('active', tab === 'ftp');
   document.getElementById('tabMediaBtn').classList.toggle('active', tab === 'media');
+  document.getElementById('tabFtpSearchBtn').classList.toggle('active', tab === 'ftpSearch');
   document.getElementById('tabFtpBtn').classList.toggle('active', tab === 'ftp');
   if (tab === 'ftp') initFtpPanel();
+  if (tab === 'media' && allMediaItems.length === 0) doMediaScan();
 }
 
 // ===========================
-// TOAST
+// TOAST & HELPERS
 // ===========================
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -19,75 +22,134 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
+async function ensureContentScript(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content.js']
+  }).catch(() => {});
+}
+
 // ===========================
 // MEDIA HUNTER
 // ===========================
-const VIDEO_EXT = ['mp4','mkv','avi','mov','webm','flv','wmv','m4v','3gp','ts','m2ts','vob','ogv','rm','rmvb','asf','divx','xvid'];
-const AUDIO_EXT = ['mp3','aac','ogg','wav','flac','m4a','wma','opus','aiff','alac','ac3','dts'];
-const MEDIA_EXT = ['m3u8','m3u','mpd','f4v','f4a'];
-
-let allResults = [];
+let allMediaItems = [];
 let currentFilter = 'ALL';
 
-function getType(url) {
-  const ext = url.split('?')[0].split('.').pop().toLowerCase();
-  if (VIDEO_EXT.includes(ext)) return 'VIDEO';
-  if (AUDIO_EXT.includes(ext)) return 'AUDIO';
-  if (MEDIA_EXT.includes(ext)) return 'MEDIA';
-  return 'MEDIA';
+function getFilteredMedia() {
+  return currentFilter === 'ALL' ? allMediaItems : allMediaItems.filter(i => i.type === currentFilter);
 }
 
-function scanPage() {
-  const VIDEO_EXT = ['mp4','mkv','avi','mov','webm','flv','wmv','m4v','3gp','ts','m2ts','vob','ogv','rm','rmvb','asf','divx','xvid'];
-  const AUDIO_EXT = ['mp3','aac','ogg','wav','flac','m4a','wma','opus','aiff','alac','ac3','dts'];
-  const MEDIA_EXT = ['m3u8','m3u','mpd','f4v','f4a'];
-  const ALL_EXT = [...VIDEO_EXT, ...AUDIO_EXT, ...MEDIA_EXT];
-  const urls = new Set();
-  const urlRegex = /https?:\/\/[^\s"'<>(){}[\]]+/gi;
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
 
-  function checkUrl(url) {
-    if (!url) return;
-    url = url.trim().split(/[\s"'<>]/)[0];
-    if (!url) return;
-    const ext = url.split('?')[0].split('.').pop().toLowerCase();
-    if (ALL_EXT.includes(ext) || url.includes('.m3u8') || url.includes('manifest')) urls.add(url);
+function sanitizeFilename(name) {
+  return String(name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().substring(0, 180) || 'media';
+}
+
+function getMediaDisplayName(item) {
+  const raw = item.name || item.url.split('/').pop().split('?')[0] || '';
+  try {
+    return decodeURIComponent(raw).replace(/\.[^.]+$/, '');
+  } catch {
+    return raw.replace(/\.[^.]+$/, '');
+  }
+}
+
+/** M3U filename: FROM.TV.S01E01 - S01E06.Long.Days (first + last media name) */
+function buildM3uPlaylistFilename(items) {
+  if (!items.length) return 'media-hunter-playlist';
+  const first = getMediaDisplayName(items[0]);
+  const last = getMediaDisplayName(items[items.length - 1]);
+  if (items.length === 1) return sanitizeFilename(first);
+
+  const epPattern = /[Ss]\d{1,2}[Ee]\d{1,2}/;
+  const firstMatch = first.match(epPattern);
+  const lastMatch = last.match(epPattern);
+
+  if (firstMatch && lastMatch) {
+    const firstIdx = first.search(epPattern);
+    const lastIdx = last.search(epPattern);
+    const head = first.slice(0, firstIdx + firstMatch[0].length);
+    const tail = last.slice(lastIdx);
+    return sanitizeFilename(`${head} - ${tail}`);
   }
 
-  document.querySelectorAll('video, audio').forEach(el => {
-    if (el.src) checkUrl(el.src);
-    if (el.currentSrc) checkUrl(el.currentSrc);
-  });
-  document.querySelectorAll('source').forEach(el => { if (el.src) checkUrl(el.src); });
-  document.querySelectorAll('a[href]').forEach(el => { checkUrl(el.href); });
-  document.querySelectorAll('[data-src],[data-url],[data-video],[data-source]').forEach(el => {
-    ['data-src','data-url','data-video','data-source'].forEach(attr => {
-      if (el.getAttribute(attr)) checkUrl(el.getAttribute(attr));
-    });
-  });
-  document.querySelectorAll('script:not([src])').forEach(el => {
-    (el.textContent.match(urlRegex) || []).forEach(checkUrl);
-  });
-  (document.documentElement.innerHTML.match(urlRegex) || []).forEach(checkUrl);
-  return [...urls];
+  let commonLen = 0;
+  const minLen = Math.min(first.length, last.length);
+  while (commonLen < minLen && first[commonLen] === last[commonLen]) commonLen++;
+  if (commonLen > 3) {
+    return sanitizeFilename(`${first} - ${last.slice(commonLen)}`);
+  }
+  return sanitizeFilename(`${first} - ${last}`);
 }
 
-function renderResults() {
-  const filtered = currentFilter === 'ALL' ? allResults : allResults.filter(u => getType(u) === currentFilter);
+function updateBottomBarState() {
+  const bar = document.getElementById('bottomBar');
+  if (!bar) return;
+  const filtered = getFilteredMedia();
+  const hasItems = filtered.length > 0;
+  bar.style.display = 'flex';
+  ['copyAllBtn', 'downloadAllBtn', 'playAllVlcBtn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !hasItems;
+  });
+  document.getElementById('filteredCount').textContent = filtered.length + ' টি';
+}
+
+function buildM3uContent(items) {
+  const lines = ['#EXTM3U'];
+  items.forEach((item, i) => {
+    const title = (item.name || item.url.split('/').pop() || `Track ${i + 1}`).replace(/,/g, ' ');
+    lines.push(`#EXTINF:-1,${title}`);
+    lines.push(item.url);
+  });
+  return lines.join('\n') + '\n';
+}
+
+function downloadM3uFile(items, baseName = 'media-hunter-playlist') {
+  if (!items.length) {
+    showToast('কোনো media নেই');
+    return;
+  }
+  const blob = new Blob([buildM3uContent(items)], { type: 'application/vnd.apple.mpegurl;charset=utf-8' });
+  const blobUrl = URL.createObjectURL(blob);
+  chrome.downloads.download({ url: blobUrl, filename: `${baseName}.m3u`, saveAs: false }, () => {
+    if (chrome.runtime.lastError) {
+      showToast('⚠️ M3U ডাউনলোড ব্যর্থ');
+    } else {
+      showToast(`✅ ${items.length} টি লিংক M3U ফাইলে যোগ হয়েছে`);
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+  });
+}
+
+function downloadMediaUrl(item, index = 0) {
+  let filename = item.name || item.url.split('/').pop().split('?')[0] || `media_${index + 1}`;
+  filename = sanitizeFilename(filename);
+  chrome.downloads.download({ url: item.url, filename, saveAs: false });
+}
+
+function renderMediaResults() {
+  const filtered = getFilteredMedia();
   let video = 0, audio = 0, other = 0;
-  allResults.forEach(u => {
-    const t = getType(u);
-    if (t === 'VIDEO') video++;
-    else if (t === 'AUDIO') audio++;
+  allMediaItems.forEach(i => {
+    if (i.type === 'VIDEO') video++;
+    else if (i.type === 'AUDIO') audio++;
     else other++;
   });
   document.getElementById('videoCount').textContent = video;
   document.getElementById('audioCount').textContent = audio;
   document.getElementById('mediaCount').textContent = other;
-  document.getElementById('totalCount').textContent = 'মোট: ' + allResults.length;
-  document.getElementById('filteredCount').textContent = filtered.length + ' টি';
+  document.getElementById('totalCount').textContent = 'মোট: ' + allMediaItems.length;
   document.getElementById('statsBar').style.display = 'flex';
   document.getElementById('filterBar').style.display = 'flex';
-  document.getElementById('bottomBar').style.display = 'flex';
+  updateBottomBarState();
 
   const content = document.getElementById('content');
   if (filtered.length === 0) {
@@ -97,18 +159,21 @@ function renderResults() {
 
   const list = document.createElement('div');
   list.className = 'media-list';
-  filtered.forEach(url => {
-    const type = getType(url);
+  filtered.forEach((item, idx) => {
     const card = document.createElement('div');
     card.className = 'media-card';
+    const safeUrl = escAttr(item.url);
+    const safeName = item.name ? escAttr(item.name) : '';
     card.innerHTML = `
       <div class="card-top">
-        <span class="ext-badge badge-${type}">${type}</span>
-        <span class="url-text">${url}</span>
+        <span class="ext-badge badge-${item.type}">${item.type}</span>
+        <span class="url-text" title="${safeUrl}">${item.url}</span>
       </div>
+      ${safeName ? `<div class="card-title" title="${safeName}">${item.name}</div>` : ''}
       <div class="card-actions">
-        <button class="btn-copy" data-url="${url}">📋 কপি</button>
-        <button class="btn-download" data-url="${url}">⬇ ডাউনলোড</button>
+        <button class="btn-copy" data-url="${safeUrl}">📋 কপি</button>
+        <button class="btn-download" data-idx="${idx}">⬇ ডাউনলোড</button>
+        <button class="btn-vlc" data-idx="${idx}">▶ VLC</button>
       </div>`;
     list.appendChild(card);
   });
@@ -118,28 +183,156 @@ function renderResults() {
   list.querySelectorAll('.btn-copy').forEach(btn => {
     btn.addEventListener('click', () => {
       navigator.clipboard.writeText(btn.dataset.url);
-      btn.textContent = '✅ কপি হয়েছে';
+      btn.textContent = '✅ কপি';
       btn.classList.add('copied');
       setTimeout(() => { btn.textContent = '📋 কপি'; btn.classList.remove('copied'); }, 1500);
     });
   });
   list.querySelectorAll('.btn-download').forEach(btn => {
-    btn.addEventListener('click', () => chrome.tabs.create({ url: btn.dataset.url }));
+    btn.addEventListener('click', () => {
+      const item = filtered[parseInt(btn.dataset.idx, 10)];
+      if (item) {
+        downloadMediaUrl(item, parseInt(btn.dataset.idx, 10));
+        showToast('⬇ ডাউনলোড শুরু...');
+      }
+    });
+  });
+  list.querySelectorAll('.btn-vlc').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = filtered[parseInt(btn.dataset.idx, 10)];
+      if (item) {
+        downloadM3uFile([item], buildM3uPlaylistFilename([item]));
+      }
+    });
+  });
+}
+
+async function doMediaScan() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ স্ক্যান চলছে...';
+  document.getElementById('content').innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">স্ক্যান চলছে...</div></div>`;
+  document.getElementById('statsBar').style.display = 'none';
+  document.getElementById('filterBar').style.display = 'none';
+  updateBottomBarState();
+
+  try {
+    const tab = await getActiveTab();
+    document.getElementById('pageTitle').textContent = (tab.title || '').substring(0, 40) + (tab.title && tab.title.length > 40 ? '...' : '');
+    await ensureContentScript(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'scanMedia' });
+    allMediaItems = response?.results || [];
+    renderMediaResults();
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">স্ক্যান ব্যর্থ হয়েছে</div><div class="state-sub">${e.message || 'পেজ reload করে আবার চেষ্টা করুন'}</div></div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = '⚡ স্ক্যান';
+}
+
+// ===========================
+// FTP SEARCH (current page)
+// ===========================
+async function doFtpSearch() {
+  const query = document.getElementById('searchInput').value.trim();
+  if (!query) { showToast('কিছু লিখুন!'); return; }
+
+  const searchBtn = document.getElementById('searchBtn');
+  const searchResults = document.getElementById('searchResults');
+  searchBtn.disabled = true;
+  searchBtn.textContent = '⏳ খোঁজা হচ্ছে...';
+  searchResults.innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">খোঁজা হচ্ছে...</div></div>`;
+
+  try {
+    const tab = await getActiveTab();
+    await ensureContentScript(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'searchFtp', query });
+    renderSearchResults(response?.results || [], query);
+  } catch (err) {
+    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">সার্চ করা যায়নি</div><div class="state-sub">${err.message || 'পেজ reload করে আবার চেষ্টা করুন'}</div></div>`;
+  }
+  searchBtn.disabled = false;
+  searchBtn.textContent = '🔍 খোঁজো';
+}
+
+function renderSearchResults(results, query) {
+  const searchResults = document.getElementById('searchResults');
+  const searchResultCount = document.getElementById('searchResultCount');
+
+  if (!results || results.length === 0) {
+    searchResultCount.textContent = '';
+    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">😕</div><div class="state-title">"${query}" পাওয়া যায়নি</div><div class="state-sub">অন্য নাম বা partial নাম দিয়ে চেষ্টা করুন</div></div>`;
+    return;
+  }
+
+  searchResultCount.textContent = results.length + ' টি পাওয়া গেছে';
+  searchResults.innerHTML = '';
+
+  results.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'result-card' + (item.isFile ? ' is-file' : '');
+    const badgeClass = item.type === 'FOLDER' ? 'badge-FOLDER'
+      : item.type === 'VIDEO' ? 'badge-VIDEO'
+      : item.type === 'AUDIO' ? 'badge-AUDIO'
+      : 'badge-FILE';
+    const icon = item.type === 'FOLDER' ? '📁' : item.type === 'VIDEO' ? '🎬' : item.type === 'AUDIO' ? '🎵' : '📄';
+
+    let displayName = item.text || '';
+    try {
+      const u = new URL(item.url);
+      const parts = decodeURIComponent(u.pathname).split('/').filter(Boolean);
+      displayName = parts[parts.length - 1] || displayName;
+    } catch {}
+
+    card.innerHTML = `
+      <div class="result-top">
+        <span class="type-badge ${badgeClass}">${icon} ${item.type}</span>
+        <span class="result-name" title="${displayName}">${displayName}</span>
+      </div>
+      <div class="result-url" title="${item.url}">${item.url}</div>
+      <div class="result-actions">
+        <button class="btn-check-tab" data-url="${item.url}">🔀 Check Tab এ দেখুন</button>
+        <button class="btn-copy-link" data-url="${item.url}">📋 লিংক কপি</button>
+        <button class="btn-open-link" data-url="${item.url}">↗ খুলুন</button>
+      </div>`;
+
+    card.querySelector('.btn-check-tab').addEventListener('click', async (e) => {
+      const url = e.currentTarget.dataset.url;
+      const tab = await getActiveTab();
+      await chrome.tabs.update(tab.id, { url });
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+      showToast('✅ Tab এ খুলছে...');
+      window.close();
+    });
+
+    card.querySelector('.btn-copy-link').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      await navigator.clipboard.writeText(btn.dataset.url);
+      btn.textContent = '✅ কপি হয়েছে!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.innerHTML = '📋 লিংক কপি'; btn.classList.remove('copied'); }, 2000);
+      showToast('✅ লিংক কপি হয়েছে!');
+    });
+
+    card.querySelector('.btn-open-link').addEventListener('click', (e) => {
+      chrome.tabs.create({ url: e.currentTarget.dataset.url });
+      showToast('🆕 নতুন ট্যাবে খুলছে');
+    });
+
+    searchResults.appendChild(card);
   });
 }
 
 // ===========================
 // FTP SCAN — popup side
-// Actual scan runs in background.js
 // ===========================
 let ftpCurrentFilter = 'ALL';
 let ftpResultsCache = {};
 
-// Popup খুললে background থেকে current state নাও
 function initFtpPanel() {
   chrome.runtime.sendMessage({ action: 'ftpGetStatus' }, (resp) => {
     if (chrome.runtime.lastError || !resp) {
-      // background কাজ করছে না, storage থেকে লোড করো
       loadFtpFromStorage();
       return;
     }
@@ -163,13 +356,11 @@ function loadFtpFromStorage() {
   });
 }
 
-// Background থেকে live update শোনা
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.action === 'ftpProgress' || msg.action === 'ftpScanDone') {
     ftpResultsCache = msg.results || {};
     updateFtpUI(msg.scanning, msg.done || 0, msg.total || 0);
     renderFtpList();
-
     if (msg.action === 'ftpScanDone') {
       showToast('✅ স্ক্যান সম্পন্ন!');
       setScanBtnState(false);
@@ -198,8 +389,6 @@ function updateFtpUI(scanning, done, total) {
 function setScanBtnState(scanning) {
   document.getElementById('ftpScanBtn').style.display = scanning ? 'none' : 'inline-block';
   document.getElementById('ftpStopBtn').style.display = scanning ? 'inline-block' : 'none';
-
-  // Scanning চলাকালীন badge দেখাও
   const badge = document.getElementById('ftpScanningBadge');
   if (badge) badge.style.display = scanning ? 'flex' : 'none';
 }
@@ -207,7 +396,6 @@ function setScanBtnState(scanning) {
 function renderFtpList() {
   const list = document.getElementById('ftpList');
   const entries = Object.entries(ftpResultsCache);
-
   const filtered = entries.filter(([, info]) => {
     if (ftpCurrentFilter === 'ALL') return true;
     if (ftpCurrentFilter === 'WORKING') return info.status === 'working';
@@ -251,53 +439,57 @@ function renderFtpList() {
 // ===========================
 // DOMContentLoaded
 // ===========================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  const tab = await getActiveTab();
+  if (tab) {
+    document.getElementById('pageTitle').textContent = (tab.title || tab.url || '').substring(0, 40);
+    const urlEl = document.getElementById('currentPageUrl');
+    if (urlEl) {
+      try {
+        const u = new URL(tab.url);
+        urlEl.textContent = u.hostname + u.pathname.slice(0, 40);
+      } catch { urlEl.textContent = (tab.url || '').slice(0, 50); }
+    }
+  }
 
-  // Main tabs
   document.getElementById('tabMediaBtn').addEventListener('click', () => switchMainTab('media'));
+  document.getElementById('tabFtpSearchBtn').addEventListener('click', () => switchMainTab('ftpSearch'));
   document.getElementById('tabFtpBtn').addEventListener('click', () => switchMainTab('ftp'));
 
-  // --- Media Hunter ---
-  document.getElementById('scanBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('scanBtn');
-    btn.disabled = true;
-    btn.textContent = '⏳ স্ক্যান চলছে...';
-    document.getElementById('content').innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">স্ক্যান চলছে...</div></div>`;
-
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      document.getElementById('pageTitle').textContent = (tab.title || '').substring(0, 40) + '...';
-      const results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: scanPage });
-      allResults = results[0].result || [];
-      renderResults();
-    } catch (e) {
-      document.getElementById('content').innerHTML = `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">স্ক্যান ব্যর্থ হয়েছে</div><div class="state-sub">${e.message}</div></div>`;
-    }
-    btn.disabled = false;
-    btn.textContent = '⚡ স্ক্যান';
-  });
+  document.getElementById('scanBtn').addEventListener('click', doMediaScan);
 
   document.querySelectorAll('.filter-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       currentFilter = tab.dataset.filter;
-      if (allResults.length > 0) renderResults();
+      if (allMediaItems.length > 0) renderMediaResults();
     });
   });
 
   document.getElementById('copyAllBtn').addEventListener('click', () => {
-    const filtered = currentFilter === 'ALL' ? allResults : allResults.filter(u => getType(u) === currentFilter);
-    navigator.clipboard.writeText(filtered.join('\n'));
-    showToast('✅ সব URL কপি হয়েছে!');
+    const filtered = getFilteredMedia();
+    if (!filtered.length) { showToast('কোনো media নেই'); return; }
+    navigator.clipboard.writeText(filtered.map(i => i.url).join('\n'));
+    showToast(`✅ ${filtered.length} টি URL কপি হয়েছে!`);
+  });
+
+  document.getElementById('downloadAllBtn').addEventListener('click', () => {
+    const filtered = getFilteredMedia();
+    if (!filtered.length) { showToast('কোনো media নেই'); return; }
+    filtered.forEach((item, i) => downloadMediaUrl(item, i));
+    showToast(`⬇ ${filtered.length} টি ফাইল ডাউনলোড শুরু...`);
   });
 
   document.getElementById('playAllVlcBtn').addEventListener('click', () => {
-    const filtered = currentFilter === 'ALL' ? allResults : allResults.filter(u => getType(u) === currentFilter);
-    if (filtered.length > 0) chrome.tabs.create({ url: filtered[0] });
+    const filtered = getFilteredMedia();
+    if (!filtered.length) { showToast('কোনো media নেই'); return; }
+    downloadM3uFile(filtered, buildM3uPlaylistFilename(filtered));
   });
 
-  // --- FTP Scan ---
+  document.getElementById('searchBtn').addEventListener('click', doFtpSearch);
+  document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') doFtpSearch(); });
+
   document.getElementById('ftpScanBtn').addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'ftpStartScan' }, (resp) => {
       if (resp && resp.status === 'started') {
@@ -341,4 +533,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('🗑 ডেটা ক্লিয়ার হয়েছে');
   });
 
+  updateBottomBarState();
+  doMediaScan();
 });
