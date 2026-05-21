@@ -231,41 +231,68 @@ async function doMediaScan() {
 }
 
 // ===========================
-// FTP SEARCH (current page)
+// FTP DEEP SEARCH (subfolders)
 // ===========================
+let ftpSearchProgressHandler = null;
+
+function onFtpSearchProgress(msg) {
+  if (msg.action !== 'ftpSearchProgress') return;
+  const el = document.getElementById('searchResultCount');
+  if (el) {
+    el.textContent = `${msg.resultsCount || 0} টি · ${msg.foldersScanned || 0} ফোল্ডার স্ক্যান...`;
+  }
+}
+
 async function doFtpSearch() {
   const query = document.getElementById('searchInput').value.trim();
   if (!query) { showToast('কিছু লিখুন!'); return; }
 
   const searchBtn = document.getElementById('searchBtn');
   const searchResults = document.getElementById('searchResults');
+  const searchResultCount = document.getElementById('searchResultCount');
+
   searchBtn.disabled = true;
-  searchBtn.textContent = '⏳ খোঁজা হচ্ছে...';
-  searchResults.innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">খোঁজা হচ্ছে...</div></div>`;
+  searchBtn.textContent = '⏳ Deep সার্চ...';
+  searchResultCount.textContent = 'শুরু হচ্ছে...';
+  searchResults.innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">Deep Search চলছে...</div><div class="state-sub">সাবফোল্ডার খুঁজছে (একটু সময় লাগতে পারে)</div></div>`;
+
+  if (ftpSearchProgressHandler) {
+    chrome.runtime.onMessage.removeListener(ftpSearchProgressHandler);
+  }
+  ftpSearchProgressHandler = onFtpSearchProgress;
+  chrome.runtime.onMessage.addListener(ftpSearchProgressHandler);
 
   try {
     const tab = await getActiveTab();
     await ensureContentScript(tab.id);
-    const response = await chrome.tabs.sendMessage(tab.id, { action: 'searchFtp', query });
-    renderSearchResults(response?.results || [], query);
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'searchFtp', query, deep: true });
+    if (response?.error) throw new Error(response.error);
+    renderSearchResults(response?.results || [], query, response);
   } catch (err) {
+    searchResultCount.textContent = '';
     searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">সার্চ করা যায়নি</div><div class="state-sub">${err.message || 'পেজ reload করে আবার চেষ্টা করুন'}</div></div>`;
+  } finally {
+    if (ftpSearchProgressHandler) {
+      chrome.runtime.onMessage.removeListener(ftpSearchProgressHandler);
+      ftpSearchProgressHandler = null;
+    }
+    searchBtn.disabled = false;
+    searchBtn.textContent = '🔍 খোঁজো';
   }
-  searchBtn.disabled = false;
-  searchBtn.textContent = '🔍 খোঁজো';
 }
 
-function renderSearchResults(results, query) {
+function renderSearchResults(results, query, meta = {}) {
   const searchResults = document.getElementById('searchResults');
   const searchResultCount = document.getElementById('searchResultCount');
+  const scanned = meta.scannedFolders ? ` · ${meta.scannedFolders} ফোল্ডার` : '';
 
   if (!results || results.length === 0) {
-    searchResultCount.textContent = '';
-    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">😕</div><div class="state-title">"${query}" পাওয়া যায়নি</div><div class="state-sub">অন্য নাম বা partial নাম দিয়ে চেষ্টা করুন</div></div>`;
+    searchResultCount.textContent = meta.scannedFolders ? `${meta.scannedFolders} ফোল্ডার স্ক্যান` : '';
+    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">😕</div><div class="state-title">"${query}" পাওয়া যায়নি</div><div class="state-sub">Deep search: সাবফোল্ডারেও খুঁজেছে — অন্য নাম দিয়ে চেষ্টা করুন</div></div>`;
     return;
   }
 
-  searchResultCount.textContent = results.length + ' টি পাওয়া গেছে';
+  searchResultCount.textContent = results.length + ' টি পাওয়া গেছে' + scanned;
   searchResults.innerHTML = '';
 
   results.forEach(item => {
