@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Media Hunter",
   "version": "13.0.0",
-  "description": "Media URL scan, FTP page থেকে Movie/Series search, এবং FTP server list scan — তিনটি ফিচার একসাথে। Developed by : Md Akash",
+  "description": "Media URL scan, FTP page থেকে Movie/Series search, এবং FTP server list scan — Developed by : Md Akash",
   "permissions": [
     "activeTab",
     "scripting",
