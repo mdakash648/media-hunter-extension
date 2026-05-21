@@ -90,6 +90,18 @@ function applySavedPayload(saved) {
   return false;
 }
 
+/** সেভড working তালিকা মিলানোর জন্য (trailing slash / case) */
+function normalizeScanUrl(url) {
+  try {
+    const u = new URL(String(url).trim());
+    let path = u.pathname || '/';
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+    return `${u.protocol}//${u.host}${path}${u.search}`.toLowerCase();
+  } catch {
+    return String(url).trim().replace(/\/+$/, '').toLowerCase();
+  }
+}
+
 function applyCompactWorking(compact) {
   const working = compact?.urls || [];
   const servers = compact?.allServers?.length ? compact.allServers : working;
@@ -97,9 +109,9 @@ function applyCompactWorking(compact) {
 
   ftpServers = servers;
   ftpResults = {};
-  const workingSet = new Set(working);
+  const workingSet = new Set(working.map(normalizeScanUrl));
   servers.forEach(url => {
-    ftpResults[url] = { status: workingSet.has(url) ? 'working' : 'dead' };
+    ftpResults[url] = { status: workingSet.has(normalizeScanUrl(url)) ? 'working' : 'dead' };
   });
   lastScanTime = compact.lastScan || compact.savedAt || lastScanTime;
   return true;
@@ -245,6 +257,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === 'checkMediaLink') {
+    checkMediaLink(msg.url)
+      .then(result => sendResponse(result))
+      .catch(() => sendResponse({ working: false, method: '', status: 0, detail: 'error' }));
+    return true;
+  }
+
   return true;
 });
 
@@ -307,14 +326,94 @@ async function startFtpScan() {
   broadcastToPopup({ action: 'ftpScanDone', done: doneCount, total: totalServers, results: ftpResults, scanning: false });
 }
 
-async function checkServer(url) {
-  return new Promise((resolve) => {
+const FAST_HEAD_MS = 900;
+const FTP_HEAD_MS = 4000;
+const FTP_GET_MS = 7000;
+
+async function fetchWithTimeout(url, options = {}) {
+  const ms = options.timeout ?? FAST_HEAD_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const res = await fetch(url, {
+      method: options.method || 'HEAD',
+      headers: options.headers,
+      signal: controller.signal,
+      cache: 'no-store',
+      redirect: 'follow',
+      mode: options.mode
+    });
+    clearTimeout(timer);
+    return res;
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+
+function isAliveHttpStatus(status) {
+  if (status >= 200 && status < 400) return true;
+  if (status === 206) return true;
+  // 403/405/500 ইত্যাদি — সার্ভার জীবিত, শুধু HEAD/GET সীমিত
+  return status !== 404 && status !== 410;
+}
+
+/** M3U মিডিয়া লিংক — দ্রুত HEAD (~1s) */
+async function checkMediaLink(url) {
+  if (!/^https?:\/\//i.test(url)) {
+    return { working: false, method: '', status: 0, detail: 'bad URL' };
+  }
+
+  try {
+    const res = await fetchWithTimeout(url, { method: 'HEAD', timeout: FAST_HEAD_MS });
+    if (res.status === 404 || res.status === 410) {
+      return { working: false, method: 'HEAD', status: res.status, detail: `${res.status}` };
+    }
+    return { working: true, method: 'HEAD', status: res.status, detail: 'OK' };
+  } catch {
+    return { working: true, method: 'LINK', status: 0, detail: 'OK' };
+  }
+}
+
+/**
+ * FTP সার্ভার হোমপেজ — HEAD-এ 404 আসলেও GET/no-cors দিয়ে আবার চেক।
+ * আগের স্ক্যানের মতো শুধু নেটওয়ার্কে পৌঁছানোই working ধরা হয় (no-cors fallback)।
+ */
+async function checkFtpServer(url) {
+  if (!/^https?:\/\//i.test(url)) return false;
+
+  try {
+    const head = await fetchWithTimeout(url, { method: 'HEAD', timeout: FTP_HEAD_MS });
+    if (isAliveHttpStatus(head.status)) return true;
+  } catch { /* GET fallback */ }
+
+  try {
+    const get = await fetchWithTimeout(url, {
+      method: 'GET',
+      timeout: FTP_GET_MS,
+      headers: { Range: 'bytes=0-0' }
+    });
+    if (isAliveHttpStatus(get.status)) return true;
+  } catch { /* no-cors fallback */ }
+
+  try {
     const controller = new AbortController();
-    const timer = setTimeout(() => { controller.abort(); resolve(false); }, 8000);
-    fetch(url, { method: 'HEAD', signal: controller.signal, cache: 'no-store', mode: 'no-cors' })
-      .then(() => { clearTimeout(timer); resolve(true); })
-      .catch(() => { clearTimeout(timer); resolve(false); });
-  });
+    const timer = setTimeout(() => controller.abort(), FTP_GET_MS);
+    await fetch(url, {
+      method: 'HEAD',
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function checkServer(url) {
+  return checkFtpServer(url);
 }
 
 function broadcastToPopup(msg) {

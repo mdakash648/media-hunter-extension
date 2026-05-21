@@ -5,9 +5,11 @@ function switchMainTab(tab) {
   document.getElementById('panelMedia').classList.toggle('active', tab === 'media');
   document.getElementById('panelFtpSearch').classList.toggle('active', tab === 'ftpSearch');
   document.getElementById('panelFtp').classList.toggle('active', tab === 'ftp');
+  document.getElementById('panelM3u').classList.toggle('active', tab === 'm3u');
   document.getElementById('tabMediaBtn').classList.toggle('active', tab === 'media');
   document.getElementById('tabFtpSearchBtn').classList.toggle('active', tab === 'ftpSearch');
   document.getElementById('tabFtpBtn').classList.toggle('active', tab === 'ftp');
+  document.getElementById('tabM3uBtn').classList.toggle('active', tab === 'm3u');
   if (tab === 'ftp') initFtpPanel();
   if (tab === 'media' && allMediaItems.length === 0) doMediaScan();
 }
@@ -422,23 +424,34 @@ function applyFtpSavedData(data) {
   return true;
 }
 
+function normalizeScanUrl(url) {
+  try {
+    const u = new URL(String(url).trim());
+    let path = u.pathname || '/';
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+    return `${u.protocol}//${u.host}${path}${u.search}`.toLowerCase();
+  } catch {
+    return String(url).trim().replace(/\/+$/, '').toLowerCase();
+  }
+}
+
 function applyFtpCompactWorking(compact) {
   if (!compact) return false;
   const working = compact.urls || [];
   const servers = compact.allServers?.length ? compact.allServers : working;
   if (!servers.length) return false;
 
-  const workingSet = new Set(working);
+  const workingSet = new Set(working.map(normalizeScanUrl));
   ftpResultsCache = {};
   servers.forEach(url => {
-    ftpResultsCache[url] = { status: workingSet.has(url) ? 'working' : 'dead' };
+    ftpResultsCache[url] = { status: workingSet.has(normalizeScanUrl(url)) ? 'working' : 'dead' };
   });
   if (compact.lastScan || compact.savedAt) {
     const d = new Date(compact.lastScan || compact.savedAt);
     document.getElementById('ftpLastScan').innerHTML =
       `শেষ স্ক্যান: <span>${d.toLocaleDateString('bn-BD')} ${d.toLocaleTimeString('bn-BD')}</span>`;
   }
-  updateFtpUI(false, list.length, list.length);
+  updateFtpUI(false, servers.length, servers.length);
   renderFtpList();
   return true;
 }
@@ -579,6 +592,281 @@ function renderFtpList() {
 }
 
 // ===========================
+// M3U UPLOAD & DOWNLOAD
+// ===========================
+let m3uEntries = [];
+let m3uSourceName = '';
+let m3uCurrentFilter = 'ALL';
+let m3uChecking = false;
+
+function isM3uFile(file) {
+  if (!file) return false;
+  const n = (file.name || '').toLowerCase();
+  return n.endsWith('.m3u') || n.endsWith('.m3u8') ||
+    file.type === 'audio/x-mpegurl' || file.type === 'application/vnd.apple.mpegurl';
+}
+
+function titleFromM3uUrl(url) {
+  try {
+    const parts = safeDecode(new URL(url).pathname).split('/').filter(Boolean);
+    return parts[parts.length - 1] || url;
+  } catch {
+    return url.split('/').pop() || url;
+  }
+}
+
+function parseM3uContent(text) {
+  const lines = text.split(/\r?\n/);
+  const entries = [];
+  let pendingTitle = '';
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === '#EXTM3U') continue;
+
+    if (trimmed.startsWith('#EXTINF:')) {
+      const m = trimmed.match(/#EXTINF:-?\d*,\s*(.*)/i);
+      pendingTitle = m ? m[1].trim() : '';
+      continue;
+    }
+    if (trimmed.startsWith('#')) continue;
+
+    if (/^https?:\/\//i.test(trimmed)) {
+      entries.push({
+        url: trimmed,
+        title: pendingTitle || titleFromM3uUrl(trimmed),
+        status: 'pending'
+      });
+      pendingTitle = '';
+    }
+  }
+  return entries;
+}
+
+/** Background এ HEAD + Range GET দিয়ে লিংক ডাউনলোডযোগ্য কিনা যাচাই */
+function checkM3uLink(url) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: 'checkMediaLink', url }, (resp) => {
+      if (chrome.runtime.lastError || !resp) {
+        resolve({ working: false, method: '', detail: 'check failed' });
+        return;
+      }
+      resolve(resp);
+    });
+  });
+}
+
+function getFilteredM3u() {
+  if (m3uCurrentFilter === 'WORKING') return m3uEntries.filter(e => e.status === 'working');
+  if (m3uCurrentFilter === 'DEAD') return m3uEntries.filter(e => e.status === 'dead');
+  return m3uEntries;
+}
+
+function updateM3uBottomBar() {
+  const bar = document.getElementById('m3uBottomBar');
+  const working = m3uEntries.filter(e => e.status === 'working');
+  if (bar) bar.classList.toggle('visible', m3uEntries.length > 0);
+  const dlAll = document.getElementById('m3uDownloadAllBtn');
+  if (dlAll) dlAll.disabled = working.length === 0;
+  const badge = document.getElementById('m3uResultBadge');
+  if (badge) badge.textContent = `${working.length} working / ${m3uEntries.length}`;
+}
+
+function showM3uDownloadReady() {
+  m3uEntries.forEach(e => {
+    e.status = 'working';
+    e.checkMethod = '';
+    e.checkDetail = '';
+  });
+  const filterBar = document.getElementById('m3uFilterBar');
+  if (filterBar) filterBar.style.display = 'flex';
+  renderM3uList();
+  updateM3uBottomBar();
+}
+
+function renderM3uList() {
+  const list = document.getElementById('m3uList');
+  const filterBar = document.getElementById('m3uFilterBar');
+  const filtered = getFilteredM3u();
+
+  if (!m3uEntries.length) {
+    if (filterBar) filterBar.style.display = 'none';
+    document.getElementById('m3uBottomBar')?.classList.remove('visible');
+    list.innerHTML = `<div class="state-msg"><div class="state-icon">📥</div><div class="state-title">M3U আপলোড করুন</div><div class="state-sub">আপলোডের পর লিংক চেক করে ডাউনলোড দেখাবে</div></div>`;
+    return;
+  }
+
+  if (filterBar && m3uEntries.length) filterBar.style.display = 'flex';
+  updateM3uBottomBar();
+
+  if (!filtered.length) {
+    list.innerHTML = `<div class="state-msg"><div class="state-icon">🔍</div><div class="state-title">এই ফিল্টারে কিছু নেই</div></div>`;
+    return;
+  }
+
+  function statusLabel(entry) {
+    if (entry.status === 'working') return entry.checking ? '✅ OK' : '✅ ডাউনলোড';
+    if (entry.status === 'dead') return `❌ নেই${entry.checkDetail ? ' ' + entry.checkDetail : ''}`;
+    if (entry.status === 'checking') return '🔄...';
+    return '⏳';
+  }
+
+  list.innerHTML = '';
+  filtered.forEach((entry) => {
+    const card = document.createElement('div');
+    card.className = `m3u-card status-${entry.status}`;
+    const safeTitle = escAttr(entry.title);
+    const safeUrl = escAttr(entry.url);
+    card.innerHTML = `
+      <div class="m3u-card-top">
+        <span class="m3u-card-title" title="${safeTitle}">${entry.title}</span>
+        <span class="m3u-card-status ${entry.status}">${statusLabel(entry)}</span>
+      </div>
+      <div class="m3u-card-url" title="${safeUrl}">${entry.url}</div>
+      <div class="m3u-card-actions">
+        <button type="button" class="btn-m3u-dl" ${entry.status === 'working' ? '' : 'disabled'}>⬇ ডাউনলোড</button>
+        <button type="button" class="btn-m3u-copy" data-url="${safeUrl}">📋 কপি</button>
+      </div>`;
+
+    const realEntry = entry;
+    card.querySelector('.btn-m3u-dl')?.addEventListener('click', () => {
+      if (realEntry.status === 'working') downloadM3uEntry(realEntry);
+    });
+    card.querySelector('.btn-m3u-copy')?.addEventListener('click', (e) => {
+      navigator.clipboard.writeText(e.currentTarget.dataset.url);
+      showToast('✅ URL কপি হয়েছে');
+    });
+    list.appendChild(card);
+  });
+}
+
+function downloadM3uEntry(entry) {
+  let filename = sanitizeFilename(entry.title || titleFromM3uUrl(entry.url));
+  if (!/\.\w{2,5}$/.test(filename)) {
+    const ext = entry.url.split('?')[0].split('.').pop();
+    if (ext && ext.length <= 5) filename += '.' + ext;
+  }
+  chrome.downloads.download({ url: entry.url, filename, saveAs: false });
+  showToast('⬇ ডাউনলোড শুরু...');
+}
+
+async function checkAllM3uLinks() {
+  if (!m3uEntries.length || m3uChecking) return;
+
+  m3uChecking = true;
+  const btn = document.getElementById('m3uCheckBtn');
+  if (btn) btn.disabled = true;
+
+  const batchSize = 24;
+  for (let i = 0; i < m3uEntries.length; i += batchSize) {
+    const batch = m3uEntries.slice(i, i + batchSize);
+    batch.forEach(e => { e.checking = true; });
+
+    await Promise.all(batch.map(async (entry) => {
+      const result = await checkM3uLink(entry.url);
+      entry.checking = false;
+      if (!result.working) {
+        entry.status = 'dead';
+        entry.checkMethod = result.method || '';
+        entry.checkDetail = result.detail || '';
+      } else {
+        entry.status = 'working';
+      }
+    }));
+    renderM3uList();
+    updateM3uBottomBar();
+  }
+
+  m3uChecking = false;
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 লিংক চেক'; }
+  const working = m3uEntries.filter(e => e.status === 'working').length;
+  const dead = m3uEntries.length - working;
+  if (dead > 0) showToast(`✅ ${working} OK · ${dead} নেই`);
+  renderM3uList();
+}
+
+function handleM3uFile(file) {
+  if (!isM3uFile(file)) {
+    showToast('⚠️ শুধু .m3u ফাইল সাপোর্টেড');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target?.result;
+    if (typeof text !== 'string') {
+      showToast('⚠️ ফাইল পড়া যায়নি');
+      return;
+    }
+    m3uEntries = parseM3uContent(text);
+    m3uSourceName = file.name;
+    m3uCurrentFilter = 'ALL';
+
+    document.getElementById('m3uFileInfo').style.display = 'flex';
+    document.getElementById('m3uFileName').textContent = `${file.name} — ${m3uEntries.length} লিংক`;
+    document.querySelectorAll('.m3u-filter-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.m3uFilter === 'ALL');
+    });
+
+    if (!m3uEntries.length) {
+      showToast('⚠️ M3U-তে কোনো http লিংক নেই');
+      renderM3uList();
+      return;
+    }
+
+    showM3uDownloadReady();
+    showToast(`✅ ${m3uEntries.length} টি — ডাউনলোড ready`);
+    checkAllM3uLinks();
+  };
+  reader.onerror = () => showToast('⚠️ ফাইল পড়া যায়নি');
+  reader.readAsText(file);
+}
+
+function initM3uPanel() {
+  const zone = document.getElementById('m3uDropZone');
+  const input = document.getElementById('m3uFileInput');
+  const chooseBtn = document.getElementById('m3uChooseBtn');
+
+  chooseBtn?.addEventListener('click', () => input?.click());
+
+  input?.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) handleM3uFile(file);
+    input.value = '';
+  });
+
+  zone?.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('dragover');
+  });
+  zone?.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleM3uFile(file);
+  });
+
+  document.getElementById('m3uCheckBtn')?.addEventListener('click', checkAllM3uLinks);
+
+  document.querySelectorAll('.m3u-filter-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.m3u-filter-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      m3uCurrentFilter = tab.dataset.m3uFilter;
+      renderM3uList();
+    });
+  });
+
+  document.getElementById('m3uDownloadAllBtn')?.addEventListener('click', () => {
+    const working = m3uEntries.filter(e => e.status === 'working');
+    if (!working.length) { showToast('কোনো working লিংক নেই'); return; }
+    working.forEach((entry, i) => downloadM3uEntry(entry));
+    showToast(`⬇ ${working.length} টি ডাউনলোড শুরু...`);
+  });
+}
+
+// ===========================
 // DOMContentLoaded
 // ===========================
 document.addEventListener('DOMContentLoaded', async () => {
@@ -597,6 +885,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('tabMediaBtn').addEventListener('click', () => switchMainTab('media'));
   document.getElementById('tabFtpSearchBtn').addEventListener('click', () => switchMainTab('ftpSearch'));
   document.getElementById('tabFtpBtn').addEventListener('click', () => switchMainTab('ftp'));
+  document.getElementById('tabM3uBtn').addEventListener('click', () => switchMainTab('m3u'));
+
+  initM3uPanel();
 
   document.getElementById('scanBtn').addEventListener('click', doMediaScan);
 

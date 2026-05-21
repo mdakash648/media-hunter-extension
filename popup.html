@@ -68,7 +68,8 @@ body {
 .main-tab:hover:not(.active) { color: var(--text); }
 .main-tab.ftp-search-tab.active { color: var(--accent2); border-bottom-color: var(--accent2); }
 .main-tab.ftp-tab.active { color: var(--accent4); border-bottom-color: var(--accent4); }
-.main-tab { font-size: 12px; padding: 10px 4px; }
+.main-tab.m3u-tab.active { color: var(--accent3); border-bottom-color: var(--accent3); }
+.main-tab { font-size: 11px; padding: 10px 3px; }
 
 /* === TAB PANELS === */
 .tab-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
@@ -536,6 +537,122 @@ body {
 }
 @keyframes bgpulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
+/* ===================== M3U DOWNLOAD TAB ===================== */
+.m3u-upload-zone {
+  margin: 10px 12px;
+  padding: 22px 14px;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: center;
+  transition: border-color 0.2s, background 0.2s;
+  flex-shrink: 0;
+}
+.m3u-upload-zone.dragover {
+  border-color: var(--accent3);
+  background: rgba(105,255,71,0.06);
+}
+.m3u-upload-icon { font-size: 28px; opacity: 0.5; margin-bottom: 6px; }
+.m3u-upload-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.m3u-upload-sub {
+  font-size: 10px; color: var(--muted);
+  font-family: 'JetBrains Mono', monospace; margin-bottom: 10px;
+}
+.btn-choose-m3u {
+  background: var(--accent3); color: #000;
+  border: none; padding: 7px 16px; border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px;
+  cursor: pointer; transition: all 0.2s;
+}
+.btn-choose-m3u:hover { background: #52e838; transform: scale(1.03); }
+.m3u-file-info {
+  padding: 6px 12px; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  color: var(--muted); flex-shrink: 0;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.m3u-file-info span { color: var(--accent3); font-weight: 700; }
+.btn-check-m3u {
+  background: rgba(105,255,71,0.15); color: var(--accent3);
+  border: 1px solid rgba(105,255,71,0.4); padding: 4px 10px;
+  border-radius: 5px; font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer;
+}
+.btn-check-m3u:disabled { opacity: 0.5; cursor: not-allowed; }
+.m3u-filter-bar {
+  display: flex; gap: 2px; padding: 7px 12px 0;
+  border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--surface);
+}
+.m3u-filter-tab {
+  padding: 4px 10px; border-radius: 6px 6px 0 0;
+  background: transparent; border: 1px solid transparent; border-bottom: none;
+  color: var(--muted); font-family: 'Rajdhani', sans-serif;
+  font-weight: 600; font-size: 11px; cursor: pointer;
+}
+.m3u-filter-tab.active { background: var(--surface2); border-color: var(--border); color: var(--accent3); }
+.m3u-list {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 7px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.m3u-list::-webkit-scrollbar { width: 4px; }
+.m3u-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.m3u-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 10px;
+}
+.m3u-card.status-working { border-color: rgba(105,255,71,0.4); }
+.m3u-card.status-dead { opacity: 0.55; }
+.m3u-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.m3u-card-title {
+  font-size: 12px; font-weight: 700; color: var(--text);
+  flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.m3u-card-status {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  padding: 2px 6px; border-radius: 3px; flex-shrink: 0;
+}
+.m3u-card-status.working { background: rgba(105,255,71,0.15); color: var(--accent3); }
+.m3u-card-status.dead { background: rgba(255,64,129,0.1); color: var(--accent2); }
+.m3u-card-status.checking { background: rgba(255,190,0,0.15); color: var(--accent4); }
+.m3u-card-status.pending { background: rgba(107,114,128,0.1); color: var(--muted); }
+.m3u-card-url {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+.m3u-card-actions { display: flex; gap: 5px; }
+.btn-m3u-dl {
+  flex: 1; padding: 5px 8px; border-radius: 4px;
+  background: rgba(255,64,129,0.08); border: 1px solid rgba(255,64,129,0.3);
+  color: var(--audio); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer;
+}
+.btn-m3u-dl:hover { background: rgba(255,64,129,0.2); }
+.btn-m3u-dl:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-m3u-copy {
+  padding: 5px 10px; border-radius: 4px;
+  background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.25);
+  color: var(--accent); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer;
+}
+#panelM3u { flex: 1; min-height: 0; overflow: hidden; }
+.m3u-scroll-area { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 52px; }
+#panelM3u .m3u-bottom-bar {
+  position: fixed; bottom: 0; left: 0; width: 520px; z-index: 100;
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 7px 11px; display: none; gap: 5px; align-items: center;
+  box-shadow: 0 -6px 20px rgba(0,0,0,0.45);
+}
+#panelM3u .m3u-bottom-bar.visible { display: flex; }
+.btn-m3u-dl-all {
+  flex: 1; padding: 6px; border-radius: 6px;
+  background: rgba(255,64,129,0.1); border: 1px solid rgba(255,64,129,0.35);
+  color: var(--audio); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer;
+}
+.btn-m3u-dl-all:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* Toast */
 .toast {
   position: fixed; bottom: 62px; left: 50%;
@@ -555,6 +672,7 @@ body {
   <button class="main-tab active" id="tabMediaBtn">🎯 মিডিয়া</button>
   <button class="main-tab ftp-search-tab" id="tabFtpSearchBtn">🔍 FTP সার্চ</button>
   <button class="main-tab ftp-tab" id="tabFtpBtn">🖥️ FTP স্ক্যান</button>
+  <button class="main-tab m3u-tab" id="tabM3uBtn">📥 M3U</button>
 </div>
 
 <!-- ===== MEDIA HUNTER PANEL ===== -->
@@ -665,6 +783,42 @@ body {
     <button class="btn-visit-all" id="ftpVisitAllBtn">🌐 সব Working লিংক ভিজিট করুন</button>
     <button class="btn-clear-ftp" id="ftpClearBtn">🗑 ক্লিয়ার</button>
     <div class="ftp-result-badge" id="ftpResultBadge">0 টি</div>
+  </div>
+</div>
+
+<!-- ===== M3U DOWNLOAD PANEL ===== -->
+<div class="tab-panel" id="panelM3u">
+  <div class="m3u-upload-zone" id="m3uDropZone">
+    <div class="m3u-upload-icon">📄</div>
+    <div class="m3u-upload-title">M3U ফাইল আপলোড করুন</div>
+    <div class="m3u-upload-sub">Drag & Drop অথবা ফাইল বেছে নিন (.m3u only)</div>
+    <button type="button" class="btn-choose-m3u" id="m3uChooseBtn">📂 ফাইল বেছে নিন</button>
+    <input type="file" id="m3uFileInput" accept=".m3u,audio/x-mpegurl,application/vnd.apple.mpegurl" hidden />
+  </div>
+
+  <div class="m3u-file-info" id="m3uFileInfo" style="display:none">
+    <span id="m3uFileName">—</span>
+    <button type="button" class="btn-check-m3u" id="m3uCheckBtn">🔍 লিংক চেক</button>
+  </div>
+
+  <div class="m3u-scroll-area">
+    <div class="m3u-filter-bar" id="m3uFilterBar" style="display:none">
+      <button class="m3u-filter-tab active" data-m3u-filter="ALL">সব</button>
+      <button class="m3u-filter-tab" data-m3u-filter="WORKING">✅ Working</button>
+      <button class="m3u-filter-tab" data-m3u-filter="DEAD">❌ Dead</button>
+    </div>
+    <div class="m3u-list" id="m3uList">
+      <div class="state-msg" id="m3uInitState">
+        <div class="state-icon">📥</div>
+        <div class="state-title">M3U আপলোড করুন</div>
+        <div class="state-sub">আপলোডেই ডাউনলোড · দ্রুত HEAD চেক (~1s)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="m3u-bottom-bar" id="m3uBottomBar">
+    <button type="button" class="btn-m3u-dl-all" id="m3uDownloadAllBtn" disabled>⬇ সব Working ডাউনলোড</button>
+    <div class="result-count-badge" id="m3uResultBadge">0 টি</div>
   </div>
 </div>
 
