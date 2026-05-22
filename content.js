@@ -8,13 +8,26 @@ const ALL_EXT = [...VIDEO_EXTS, ...AUDIO_EXTS, ...MEDIA_EXTS];
 
 const FILE_EXT_RE = /\.(mp4|mkv|avi|mov|webm|mp3|flac|m4v|zip|rar|7z|iso|srt|ass|sub|wmv|ts|m2ts|mpg|mpeg)$/i;
 
+/** 0 = সীমা নেই (Windows search — কোনো folder বাদ নয়) */
 const DEEP_SEARCH = {
-  maxDepth: 10,
-  maxFolders: 150,
-  maxConcurrent: 6,
+  maxDepth: 0,
+  maxFolders: 0,
+  maxConcurrent: 10,
   fetchTimeoutMs: 15000,
-  maxResults: 300
+  maxResults: 0
 };
+
+function deepUnlimited(limit) {
+  return limit == null || limit <= 0;
+}
+
+function deepUnderLimit(limit, count) {
+  return deepUnlimited(limit) || count < limit;
+}
+
+function deepCanEnqueueChild(depth) {
+  return deepUnlimited(DEEP_SEARCH.maxDepth) || depth + 1 <= DEEP_SEARCH.maxDepth;
+}
 
 /** decodeURIComponent safe — invalid % (যেমন 100% বা ভাঙা encoding) এ URI malformed এড়ায় */
 function safeDecode(str) {
@@ -136,10 +149,56 @@ function makeSearchResult(href, text, depth) {
   };
 }
 
-function reportSearchProgress(data) {
+let deepSearchAbort = false;
+let deepSearchLiveTimer = null;
+
+function publishDeepSearchProgress(ctx) {
+  const payload = {
+    action: 'ftpSearchProgress',
+    query: ctx.query,
+    rootUrl: ctx.rootUrl,
+    results: ctx.results.slice(),
+    resultsCount: ctx.results.length,
+    foldersScanned: ctx.foldersScanned || 0,
+    running: ctx.running !== false,
+    current: ctx.current || ctx.rootUrl,
+    phase: ctx.phase || 'crawl'
+  };
   try {
-    chrome.runtime.sendMessage({ action: 'ftpSearchProgress', ...data });
-  } catch { /* popup closed */ }
+    chrome.runtime.sendMessage(payload);
+  } catch { /* popup বন্ধ */ }
+  try {
+    chrome.storage.local.set({
+      ftpDeepSearchData: {
+        query: ctx.query,
+        rootUrl: ctx.rootUrl,
+        results: ctx.results.slice(),
+        foldersScanned: ctx.foldersScanned || 0,
+        running: ctx.running !== false,
+        updatedAt: new Date().toISOString()
+      }
+    });
+  } catch { /* storage */ }
+}
+
+function scheduleDeepSearchLiveUpdate(ctx) {
+  if (deepSearchLiveTimer) return;
+  deepSearchLiveTimer = setTimeout(() => {
+    deepSearchLiveTimer = null;
+    publishDeepSearchProgress(ctx);
+  }, 250);
+}
+
+function reportSearchProgress(data) {
+  publishDeepSearchProgress({
+    query: data.query || '',
+    rootUrl: data.rootUrl || location.href,
+    results: data.results || [],
+    foldersScanned: data.foldersScanned || 0,
+    running: data.running !== false,
+    current: data.current,
+    phase: data.phase
+  });
 }
 
 async function fetchFolderHtml(url) {
@@ -159,7 +218,7 @@ async function fetchFolderHtml(url) {
   }
 }
 
-function collectLinksFromHtml(html, baseUrl, q, rootUrl, depth, results, seenResults, queue, visitedFolders) {
+function collectLinksFromHtml(html, baseUrl, q, rootUrl, depth, results, seenResults, nextLevel, visitedFolders) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
   doc.querySelectorAll('a[href]').forEach(a => {
@@ -188,9 +247,9 @@ function collectLinksFromHtml(html, baseUrl, q, rootUrl, depth, results, seenRes
 
       if (isFolderLink(href)) {
         const folderUrl = normalizeDirUrl(href);
-        if (!visitedFolders.has(folderUrl) && depth + 1 <= DEEP_SEARCH.maxDepth) {
+        if (!visitedFolders.has(folderUrl) && deepCanEnqueueChild(depth)) {
           visitedFolders.add(folderUrl);
-          queue.push({ url: folderUrl, depth: depth + 1 });
+          nextLevel.push({ url: folderUrl, depth: depth + 1 });
         }
       }
     } catch {
@@ -199,7 +258,7 @@ function collectLinksFromHtml(html, baseUrl, q, rootUrl, depth, results, seenRes
   });
 }
 
-function collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults, queue, visitedFolders) {
+function collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults, nextLevel, visitedFolders) {
   document.querySelectorAll('a[href]').forEach(a => {
     try {
       const href = a.href;
@@ -217,9 +276,9 @@ function collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults
 
       if (isFolderLink(href)) {
         const folderUrl = normalizeDirUrl(href);
-        if (!visitedFolders.has(folderUrl) && depth + 1 <= DEEP_SEARCH.maxDepth) {
+        if (!visitedFolders.has(folderUrl) && deepCanEnqueueChild(depth)) {
           visitedFolders.add(folderUrl);
-          queue.push({ url: folderUrl, depth: depth + 1 });
+          nextLevel.push({ url: folderUrl, depth: depth + 1 });
         }
       }
     } catch {
@@ -228,19 +287,47 @@ function collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults
   });
 }
 
-async function scanOneFolder({ url, depth }, rootUrl, q, results, seenResults, queue, visitedFolders) {
+/** এক ফোল্ডার স্ক্যান — পরের depth-এর তালিকা ফেরত */
+async function scanOneFolderLevel({ url, depth }, rootUrl, q, results, seenResults, visitedFolders) {
+  const nextLevel = [];
   const isCurrentPage = url === location.href || url === normalizeDirUrl(location.href);
 
   if (isCurrentPage) {
-    collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults, queue, visitedFolders);
-    return;
+    collectLinksFromCurrentDocument(q, rootUrl, depth, results, seenResults, nextLevel, visitedFolders);
+    return nextLevel;
   }
 
   try {
     const html = await fetchFolderHtml(url);
-    collectLinksFromHtml(html, url, q, rootUrl, depth, results, seenResults, queue, visitedFolders);
+    collectLinksFromHtml(html, url, q, rootUrl, depth, results, seenResults, nextLevel, visitedFolders);
   } catch {
-    // skip unreachable folder
+    /* unreachable */
+  }
+  return nextLevel;
+}
+
+/** search?q= / movie/search?search= — ফলাফল লিংক; folder crawl আলাদা */
+async function tryDeepSearchEndpoints(query, rootUrl, results, seenResults, visitedFolders) {
+  if (typeof buildFtpSearchUrlCandidates !== 'function') return;
+  const q = query.toLowerCase().trim();
+  const candidates = buildFtpSearchUrlCandidates(rootUrl, query);
+
+  for (const searchUrl of candidates) {
+    if (!deepUnderLimit(DEEP_SEARCH.maxResults, results.length)) break;
+    try {
+      const html = await fetchFolderHtml(searchUrl);
+      const discard = [];
+      collectLinksFromHtml(html, searchUrl, rootUrl, q, 0, results, seenResults, discard, visitedFolders);
+      reportSearchProgress({
+        foldersScanned: 0,
+        queueLen: 0,
+        resultsCount: results.length,
+        current: searchUrl,
+        phase: 'search_url'
+      });
+    } catch {
+      /* পরের প্যাটার্ন */
+    }
   }
 }
 
@@ -252,51 +339,96 @@ async function deepSearchFtp(query) {
   const results = [];
   const seenResults = new Set();
   const visitedFolders = new Set();
-  const queue = [{ url: rootUrl, depth: 0 }];
   visitedFolders.add(rootUrl);
 
   let foldersScanned = 0;
+  let currentLevel = [{ url: rootUrl, depth: 0 }];
 
-  reportSearchProgress({ foldersScanned: 0, queueLen: 1, resultsCount: 0, current: rootUrl });
+  const liveCtx = () => ({
+    query: q,
+    rootUrl,
+    results,
+    foldersScanned,
+    running: true
+  });
 
+  publishDeepSearchProgress({ ...liveCtx(), phase: 'search_urls', current: rootUrl });
+
+  await tryDeepSearchEndpoints(query, rootUrl, results, seenResults, visitedFolders);
+  scheduleDeepSearchLiveUpdate({ ...liveCtx(), phase: 'search_urls_done', current: rootUrl });
+
+  /** Level BFS — প্রতিটি depth-এর সব folder, কোনো branch বাদ নয় (Windows-style) */
   while (
-    queue.length > 0 &&
-    foldersScanned < DEEP_SEARCH.maxFolders &&
-    results.length < DEEP_SEARCH.maxResults
+    currentLevel.length > 0 &&
+    !deepSearchAbort &&
+    deepUnderLimit(DEEP_SEARCH.maxFolders, foldersScanned) &&
+    deepUnderLimit(DEEP_SEARCH.maxResults, results.length)
   ) {
-    const batch = [];
-    while (
-      batch.length < DEEP_SEARCH.maxConcurrent &&
-      queue.length > 0 &&
-      foldersScanned + batch.length < DEEP_SEARCH.maxFolders
-    ) {
-      batch.push(queue.shift());
+    const nextLevel = [];
+
+    for (let i = 0; i < currentLevel.length; i += DEEP_SEARCH.maxConcurrent) {
+      if (deepSearchAbort) break;
+      if (!deepUnderLimit(DEEP_SEARCH.maxFolders, foldersScanned)) break;
+      if (!deepUnderLimit(DEEP_SEARCH.maxResults, results.length)) break;
+
+      const batch = currentLevel.slice(i, i + DEEP_SEARCH.maxConcurrent);
+      const childLists = await Promise.all(
+        batch.map(item =>
+          scanOneFolderLevel(item, rootUrl, q, results, seenResults, visitedFolders)
+        )
+      );
+
+      for (const children of childLists) {
+        mergeFolderLevels(nextLevel, children);
+      }
+
+      foldersScanned += batch.length;
+      scheduleDeepSearchLiveUpdate({
+        ...liveCtx(),
+        phase: 'crawl',
+        current: batch[batch.length - 1]?.url || rootUrl
+      });
     }
-    if (!batch.length) break;
 
-    await Promise.all(
-      batch.map(item =>
-        scanOneFolder(item, rootUrl, q, results, seenResults, queue, visitedFolders)
-      )
-    );
-
-    foldersScanned += batch.length;
-    reportSearchProgress({
-      foldersScanned,
-      queueLen: queue.length,
-      resultsCount: results.length,
-      current: batch[batch.length - 1]?.url || rootUrl
-    });
+    if (deepSearchAbort) break;
+    currentLevel = nextLevel;
   }
 
   results.sort((a, b) => (a.depth || 0) - (b.depth || 0));
 
-  return {
+  const finalData = {
     results,
     scannedFolders: foldersScanned,
     rootUrl,
-    deep: true
+    deep: true,
+    stopped: deepSearchAbort
   };
+
+  publishDeepSearchProgress({
+    query: q,
+    rootUrl,
+    results,
+    foldersScanned,
+    running: false,
+    phase: 'done'
+  });
+
+  try {
+    chrome.runtime.sendMessage({ action: 'ftpSearchDone', query: q, ...finalData, running: false });
+  } catch { /* popup বন্ধ */ }
+
+  return finalData;
+}
+
+/** একই লেভেলে duplicate folder URL এড়ায় */
+function mergeFolderLevels(target, incoming) {
+  const seen = new Set(target.map((x) => x.url));
+  for (const item of incoming) {
+    if (!seen.has(item.url)) {
+      seen.add(item.url);
+      target.push(item);
+    }
+  }
 }
 
 function searchInPage(query) {
@@ -364,13 +496,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === 'ftpDeepSearchStop') {
+    deepSearchAbort = true;
+    sendResponse({ stopped: true });
+    return true;
+  }
+
   if (msg.action === 'searchFtp') {
     const runDeep = msg.deep !== false;
 
     if (runDeep) {
-      deepSearchFtp(msg.query)
-        .then(data => sendResponse(data))
-        .catch(err => sendResponse({ results: [], error: err.message, deep: true }));
+      deepSearchAbort = false;
+      deepSearchFtp(msg.query).catch((err) => {
+        publishDeepSearchProgress({
+          query: String(msg.query || '').toLowerCase().trim(),
+          rootUrl: normalizeDirUrl(location.href),
+          results: [],
+          foldersScanned: 0,
+          running: false
+        });
+        try {
+          chrome.runtime.sendMessage({
+            action: 'ftpSearchDone',
+            query: msg.query,
+            results: [],
+            error: err.message,
+            running: false
+          });
+        } catch { /* */ }
+      });
+      sendResponse({ started: true, live: true });
       return true;
     }
 

@@ -284,9 +284,11 @@ async function doMediaScan() {
 // ===========================
 // FTP DEEP SEARCH (subfolders) + BULK SEARCH (working servers)
 // ===========================
-let ftpSearchProgressHandler = null;
 let bulkFtpSearchRows = [];
 let bulkFtpSearchRunning = false;
+let deepSearchRunning = false;
+let deepSearchQuery = '';
+let deepSearchRenderedUrls = new Set();
 
 function isBulkFtpSearchOn() {
   return document.getElementById('bulkFtpToggle')?.checked === true;
@@ -353,14 +355,158 @@ function initFtpSearchPanel() {
   loadFtpDirectFromStorage(() => {
     updateBulkWorkingHint();
     syncBulkSearchFromBackground();
+    loadDeepSearchFromStorage();
   });
 }
 
-function onFtpSearchProgress(msg) {
-  if (msg.action !== 'ftpSearchProgress') return;
-  const el = document.getElementById('searchResultCount');
-  if (el) {
-    el.textContent = `${msg.resultsCount || 0} টি · ${msg.foldersScanned || 0} ফোল্ডার স্ক্যান...`;
+function setDeepSearchBtnState(scanning) {
+  const searchBtn = document.getElementById('searchBtn');
+  if (!searchBtn) return;
+  deepSearchRunning = scanning;
+  if (!isBulkFtpSearchOn()) {
+    searchBtn.textContent = scanning ? '⏹ বন্ধ' : '🔍 খোঁজো';
+    searchBtn.disabled = false;
+  }
+}
+
+function loadDeepSearchFromStorage() {
+  chrome.storage.local.get(['ftpDeepSearchData'], (data) => {
+    if (chrome.runtime.lastError) return;
+    const saved = data.ftpDeepSearchData;
+    if (!saved?.results?.length && !saved?.running) return;
+    applyDeepSearchProgress({
+      action: 'ftpSearchProgress',
+      query: saved.query,
+      rootUrl: saved.rootUrl,
+      results: saved.results || [],
+      foldersScanned: saved.foldersScanned || 0,
+      running: !!saved.running
+    });
+  });
+  chrome.runtime.sendMessage({ action: 'ftpDeepSearchGetStatus' }, (resp) => {
+    if (chrome.runtime.lastError || !resp) return;
+    if ((resp.results?.length || 0) > 0 || resp.running) {
+      applyDeepSearchProgress({ action: 'ftpSearchProgress', ...resp });
+    }
+  });
+}
+
+function showDeepSearchLiveShell(query) {
+  const searchResults = document.getElementById('searchResults');
+  deepSearchRenderedUrls = new Set();
+  searchResults.innerHTML = `
+    <div class="deep-live-status" id="deepLiveStatus">
+      <div class="spinner" style="width:18px;height:18px;display:inline-block;vertical-align:middle;margin-right:6px"></div>
+      <span>লাইভ সার্চ চলছে — পপআপ বন্ধ করলেও চলবে</span>
+    </div>
+    <div id="deepSearchLiveList"></div>`;
+  const info = document.getElementById('currentPageUrl');
+  if (info) info.textContent = `"${query}" — লাইভ ফলাফল`;
+}
+
+function buildSearchResultCard(item) {
+  const card = document.createElement('div');
+  card.className = 'result-card' + (item.isFile ? ' is-file' : '');
+  const badgeClass = item.type === 'FOLDER' ? 'badge-FOLDER'
+    : item.type === 'VIDEO' ? 'badge-VIDEO'
+    : item.type === 'AUDIO' ? 'badge-AUDIO'
+    : 'badge-FILE';
+  const icon = item.type === 'FOLDER' ? '📁' : item.type === 'VIDEO' ? '🎬' : item.type === 'AUDIO' ? '🎵' : '📄';
+
+  let displayName = item.text || '';
+  try {
+    const u = new URL(item.url);
+    const parts = safeDecode(u.pathname).split('/').filter(Boolean);
+    displayName = parts[parts.length - 1] || displayName;
+  } catch {}
+
+  card.innerHTML = `
+    <div class="result-top">
+      <span class="type-badge ${badgeClass}">${icon} ${item.type}</span>
+      <span class="result-name" title="${displayName}">${displayName}</span>
+    </div>
+    <div class="result-url" title="${item.url}">${item.url}</div>
+    <div class="result-actions">
+      <button class="btn-check-tab" data-url="${item.url}">🔀 Check Tab এ দেখুন</button>
+      <button class="btn-copy-link" data-url="${item.url}">📋 লিংক কপি</button>
+      <button class="btn-open-link" data-url="${item.url}">↗ খুলুন</button>
+    </div>`;
+
+  card.querySelector('.btn-check-tab').addEventListener('click', async (e) => {
+    const url = e.currentTarget.dataset.url;
+    const tab = await getActiveTab();
+    await chrome.tabs.update(tab.id, { url });
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+    showToast('✅ Tab এ খুলছে...');
+    window.close();
+  });
+
+  card.querySelector('.btn-copy-link').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    await navigator.clipboard.writeText(btn.dataset.url);
+    btn.textContent = '✅ কপি হয়েছে!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.innerHTML = '📋 লিংক কপি'; btn.classList.remove('copied'); }, 2000);
+    showToast('✅ লিংক কপি হয়েছে!');
+  });
+
+  card.querySelector('.btn-open-link').addEventListener('click', (e) => {
+    chrome.tabs.create({ url: e.currentTarget.dataset.url });
+    showToast('🆕 নতুন ট্যাবে খুলছে');
+  });
+
+  return card;
+}
+
+function applyDeepSearchProgress(msg) {
+  if (!msg || isBulkFtpSearchOn()) return;
+
+  const results = msg.results || [];
+  const query = msg.query || deepSearchQuery || document.getElementById('searchInput')?.value?.trim() || '';
+  deepSearchQuery = query;
+  if (msg.query) {
+    const input = document.getElementById('searchInput');
+    if (input) input.value = msg.query;
+  }
+
+  setDeepSearchBtnState(!!msg.running);
+
+  const searchResultCount = document.getElementById('searchResultCount');
+  const scanned = msg.foldersScanned ? ` · ${msg.foldersScanned} ফোল্ডার` : '';
+  const liveTag = msg.running ? ' · 🔄 লাইভ' : '';
+  if (searchResultCount) {
+    searchResultCount.textContent = results.length
+      ? `${results.length} টি${scanned}${liveTag}`
+      : (msg.running ? `খুঁজছি...${scanned}` : `0 টি${scanned}`);
+  }
+
+  const searchResults = document.getElementById('searchResults');
+  if (msg.running && !document.getElementById('deepSearchLiveList')) {
+    showDeepSearchLiveShell(query);
+  }
+
+  let list = document.getElementById('deepSearchLiveList');
+  if (!list && results.length) {
+    searchResults.innerHTML = '<div id="deepSearchLiveList"></div>';
+    list = document.getElementById('deepSearchLiveList');
+    deepSearchRenderedUrls = new Set();
+  }
+  if (!list) return;
+
+  results.forEach((item) => {
+    if (!item?.url || deepSearchRenderedUrls.has(item.url)) return;
+    deepSearchRenderedUrls.add(item.url);
+    list.appendChild(buildSearchResultCard(item));
+  });
+
+  const statusEl = document.getElementById('deepLiveStatus');
+  if (statusEl) {
+    statusEl.style.display = msg.running ? 'block' : 'none';
+  }
+
+  if (!results.length && !msg.running) {
+    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">😕</div><div class="state-title">"${query}" পাওয়া যায়নি</div><div class="state-sub">সাবফোল্ডারেও খুঁজেছে</div></div>`;
   }
 }
 
@@ -487,36 +633,48 @@ async function doFtpSearch() {
     return;
   }
 
-  const searchResults = document.getElementById('searchResults');
-  const searchResultCount = document.getElementById('searchResultCount');
-
-  searchBtn.disabled = true;
-  searchBtn.textContent = '⏳ Deep সার্চ...';
-  searchResultCount.textContent = 'শুরু হচ্ছে...';
-  searchResults.innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">Deep Search চলছে...</div><div class="state-sub">সাবফোল্ডার খুঁজছে (একটু সময় লাগতে পারে)</div></div>`;
-
-  if (ftpSearchProgressHandler) {
-    chrome.runtime.onMessage.removeListener(ftpSearchProgressHandler);
+  if (deepSearchRunning) {
+    const tab = await getActiveTab();
+    if (tab?.id) {
+      chrome.tabs.sendMessage(tab.id, { action: 'ftpDeepSearchStop' }).catch(() => {});
+    }
+    setDeepSearchBtnState(false);
+    showToast('⏹ সার্চ বন্ধ হচ্ছে...');
+    return;
   }
-  ftpSearchProgressHandler = onFtpSearchProgress;
-  chrome.runtime.onMessage.addListener(ftpSearchProgressHandler);
+
+  const searchResultCount = document.getElementById('searchResultCount');
+  deepSearchQuery = query;
+  showDeepSearchLiveShell(query);
+  if (searchResultCount) searchResultCount.textContent = 'খুঁজছি... 0 টি';
 
   try {
     const tab = await getActiveTab();
     await ensureContentScript(tab.id);
-    const response = await chrome.tabs.sendMessage(tab.id, { action: 'searchFtp', query, deep: true });
-    if (response?.error) throw new Error(response.error);
-    renderSearchResults(response?.results || [], query, response);
+    chrome.tabs.sendMessage(tab.id, { action: 'searchFtp', query, deep: true, live: true }, (response) => {
+      if (chrome.runtime.lastError) {
+        document.getElementById('searchResults').innerHTML =
+          `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">সার্চ শুরু হয়নি</div><div class="state-sub">${chrome.runtime.lastError.message}</div></div>`;
+        setDeepSearchBtnState(false);
+        return;
+      }
+      if (response?.error) {
+        document.getElementById('searchResults').innerHTML =
+          `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">সার্চ করা যায়নি</div><div class="state-sub">${response.error}</div></div>`;
+        setDeepSearchBtnState(false);
+        return;
+      }
+      if (response?.started) {
+        deepSearchRunning = true;
+        setDeepSearchBtnState(true);
+        showToast('🔍 লাইভ সার্চ — পপআপ বন্ধ করলেও চলবে');
+      }
+    });
   } catch (err) {
-    searchResultCount.textContent = '';
-    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">সার্চ করা যায়নি</div><div class="state-sub">${err.message || 'পেজ reload করে আবার চেষ্টা করুন'}</div></div>`;
-  } finally {
-    if (ftpSearchProgressHandler) {
-      chrome.runtime.onMessage.removeListener(ftpSearchProgressHandler);
-      ftpSearchProgressHandler = null;
-    }
-    searchBtn.disabled = false;
-    searchBtn.textContent = '🔍 খোঁজো';
+    if (searchResultCount) searchResultCount.textContent = '';
+    document.getElementById('searchResults').innerHTML =
+      `<div class="state-msg"><div class="state-icon">⚠️</div><div class="state-title">সার্চ করা যায়নি</div><div class="state-sub">${err.message || 'পেজ reload করে আবার চেষ্টা করুন'}</div></div>`;
+    setDeepSearchBtnState(false);
   }
 }
 
@@ -532,61 +690,12 @@ function renderSearchResults(results, query, meta = {}) {
   }
 
   searchResultCount.textContent = results.length + ' টি পাওয়া গেছে' + scanned;
-  searchResults.innerHTML = '';
-
-  results.forEach(item => {
-    const card = document.createElement('div');
-    card.className = 'result-card' + (item.isFile ? ' is-file' : '');
-    const badgeClass = item.type === 'FOLDER' ? 'badge-FOLDER'
-      : item.type === 'VIDEO' ? 'badge-VIDEO'
-      : item.type === 'AUDIO' ? 'badge-AUDIO'
-      : 'badge-FILE';
-    const icon = item.type === 'FOLDER' ? '📁' : item.type === 'VIDEO' ? '🎬' : item.type === 'AUDIO' ? '🎵' : '📄';
-
-    let displayName = item.text || '';
-    try {
-      const u = new URL(item.url);
-      const parts = safeDecode(u.pathname).split('/').filter(Boolean);
-      displayName = parts[parts.length - 1] || displayName;
-    } catch {}
-
-    card.innerHTML = `
-      <div class="result-top">
-        <span class="type-badge ${badgeClass}">${icon} ${item.type}</span>
-        <span class="result-name" title="${displayName}">${displayName}</span>
-      </div>
-      <div class="result-url" title="${item.url}">${item.url}</div>
-      <div class="result-actions">
-        <button class="btn-check-tab" data-url="${item.url}">🔀 Check Tab এ দেখুন</button>
-        <button class="btn-copy-link" data-url="${item.url}">📋 লিংক কপি</button>
-        <button class="btn-open-link" data-url="${item.url}">↗ খুলুন</button>
-      </div>`;
-
-    card.querySelector('.btn-check-tab').addEventListener('click', async (e) => {
-      const url = e.currentTarget.dataset.url;
-      const tab = await getActiveTab();
-      await chrome.tabs.update(tab.id, { url });
-      await chrome.tabs.update(tab.id, { active: true });
-      await chrome.windows.update(tab.windowId, { focused: true });
-      showToast('✅ Tab এ খুলছে...');
-      window.close();
-    });
-
-    card.querySelector('.btn-copy-link').addEventListener('click', async (e) => {
-      const btn = e.currentTarget;
-      await navigator.clipboard.writeText(btn.dataset.url);
-      btn.textContent = '✅ কপি হয়েছে!';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.innerHTML = '📋 লিংক কপি'; btn.classList.remove('copied'); }, 2000);
-      showToast('✅ লিংক কপি হয়েছে!');
-    });
-
-    card.querySelector('.btn-open-link').addEventListener('click', (e) => {
-      chrome.tabs.create({ url: e.currentTarget.dataset.url });
-      showToast('🆕 নতুন ট্যাবে খুলছে');
-    });
-
-    searchResults.appendChild(card);
+  searchResults.innerHTML = '<div id="deepSearchLiveList"></div>';
+  deepSearchRenderedUrls = new Set();
+  const list = document.getElementById('deepSearchLiveList');
+  results.forEach((item) => {
+    deepSearchRenderedUrls.add(item.url);
+    list.appendChild(buildSearchResultCard(item));
   });
 }
 
@@ -701,6 +810,26 @@ function loadFtpFromStorage() {
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.action === 'ftpSearchProgress') {
+    applyDeepSearchProgress(msg);
+    return;
+  }
+  if (msg.action === 'ftpSearchDone') {
+    applyDeepSearchProgress({ ...msg, running: false });
+    deepSearchRunning = false;
+    setDeepSearchBtnState(false);
+    const n = (msg.results || []).length;
+    const scanned = msg.scannedFolders || msg.foldersScanned || 0;
+    if (msg.stopped) {
+      showToast(`⏹ বন্ধ — ${n} টি ফলাফল`);
+    } else if (msg.error) {
+      showToast('⚠️ ' + msg.error);
+    } else {
+      showToast(n ? `✅ ${n} টি · ${scanned} ফোল্ডার` : `😕 পাওয়া যায়নি (${scanned} ফোল্ডার)`);
+    }
+    return;
+  }
+
   if (msg.action === 'bulkSearchProgress' || msg.action === 'bulkSearchDone') {
     applyBulkSearchStatus(msg);
     if (msg.action === 'bulkSearchDone') {

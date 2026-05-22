@@ -2,11 +2,13 @@
 // MEDIA HUNTER - Background Service Worker
 // FTP scan — chrome.storage.local + IndexedDB (Android/Kiwi)
 // ============================================================
+importScripts('searchUtils.js');
 
 const SERVER_LIST_URL = 'https://raw.githubusercontent.com/mdakash648/media-hunter-extension/main/serverList.json';
 const STORAGE_KEY = 'ftpScanData';
 const STORAGE_KEY_WORKING = 'ftpWorkingServers';
 const STORAGE_KEY_BULK_SEARCH = 'ftpBulkSearchData';
+const STORAGE_KEY_DEEP_SEARCH = 'ftpDeepSearchData';
 const IDB_NAME = 'MediaHunterDB';
 const IDB_STORE = 'ftp';
 const IDB_KEY = 'ftpScanData';
@@ -207,8 +209,29 @@ chrome.runtime.onInstalled.addListener(() => { restoreFromStorage(); });
 
 chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'keepAlive' && (ftpScanning || bulkSearchRunning)) { /* heartbeat */ }
+  if (alarm.name === 'keepAlive' && (ftpScanning || bulkSearchRunning || deepSearchRunningFlag)) { /* heartbeat */ }
 });
+
+let deepSearchRunningFlag = false;
+
+async function persistDeepSearch(msg) {
+  const running = msg.action === 'ftpSearchProgress' ? !!msg.running : false;
+  deepSearchRunningFlag = running;
+  try {
+    await storageSet({
+      [STORAGE_KEY_DEEP_SEARCH]: {
+        query: msg.query || '',
+        rootUrl: msg.rootUrl || '',
+        results: msg.results || [],
+        foldersScanned: msg.foldersScanned || 0,
+        running,
+        updatedAt: new Date().toISOString()
+      }
+    });
+  } catch (e) {
+    console.warn('[Media Hunter] deep search save failed:', e);
+  }
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
@@ -268,6 +291,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       });
     })();
+    return true;
+  }
+
+  if (msg.action === 'ftpSearchProgress' || msg.action === 'ftpSearchDone') {
+    persistDeepSearch(msg).then(() => broadcastToPopup(msg)).catch(() => broadcastToPopup(msg));
+    return false;
+  }
+
+  if (msg.action === 'ftpDeepSearchGetStatus') {
+    (async () => {
+      try {
+        const data = await storageGet([STORAGE_KEY_DEEP_SEARCH]);
+        const saved = data[STORAGE_KEY_DEEP_SEARCH] || null;
+        sendResponse({
+          query: saved?.query || '',
+          rootUrl: saved?.rootUrl || '',
+          results: saved?.results || [],
+          foldersScanned: saved?.foldersScanned || 0,
+          running: !!saved?.running
+        });
+      } catch {
+        sendResponse({ results: [], running: false });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.action === 'ftpDeepSearchClear') {
+    deepSearchRunningFlag = false;
+    chrome.storage.local.remove(STORAGE_KEY_DEEP_SEARCH);
+    sendResponse({ status: 'cleared' });
     return true;
   }
 
@@ -493,7 +547,8 @@ async function checkServer(url) {
 const BULK_SEARCH_MS = 15000;
 const BULK_TEXT_MAX = 768000;
 const BULK_FILE_EXT_RE = /\.(mp4|mkv|avi|mov|webm|mp3|flac|m4v|zip|rar|7z|iso|srt|ass|sub|wmv|ts|m2ts|mpg|mpeg)$/i;
-const BULK_CRAWL = { maxDepth: 6, maxFolders: 55 };
+const BULK_CRAWL = { maxDepth: 15, maxFolders: 200 };
+const BULK_SEARCH_ENDPOINT_MS = 9000;
 
 async function saveBulkSearchState(running) {
   await storageSet({
@@ -685,8 +740,8 @@ function bulkStripHtmlTags(s) {
   return String(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-async function bulkFetchFolderHtml(url) {
-  const res = await fetchWithTimeout(url, { method: 'GET', timeout: BULK_SEARCH_MS });
+async function bulkFetchFolderHtml(url, timeoutMs = BULK_SEARCH_MS) {
+  const res = await fetchWithTimeout(url, { method: 'GET', timeout: timeoutMs });
   if (!res.ok && res.status >= 400 && res.status !== 403) {
     throw new Error(`HTTP ${res.status}`);
   }
@@ -695,7 +750,34 @@ async function bulkFetchFolderHtml(url) {
   return new TextDecoder('utf-8', { fatal: false }).decode(buf.slice(0, len));
 }
 
-function bulkCollectFromHtml(html, baseUrl, rootUrl, q, state) {
+/** movie/search?search=, search?q=, search?keyword= */
+async function tryBulkSearchEndpoints(baseUrl, query) {
+  const q = String(query || '').trim().toLowerCase();
+  const rootUrl = bulkNormalizeDirUrl(baseUrl);
+  const candidates = buildFtpSearchUrlCandidates(baseUrl, query);
+  const state = { visited: new Set([rootUrl]), seen: new Set(), match: null };
+
+  for (const searchUrl of candidates) {
+    try {
+      const html = await bulkFetchFolderHtml(searchUrl, BULK_SEARCH_ENDPOINT_MS);
+      bulkCollectFromHtmlToLevel(html, searchUrl, rootUrl, q, 0, state, []);
+      if (state.match) {
+        return {
+          status: 'found',
+          url: baseUrl,
+          searchUrl: state.match.href,
+          matchText: state.match.text,
+          via: 'search_url'
+        };
+      }
+    } catch {
+      /* next pattern */
+    }
+  }
+  return null;
+}
+
+function bulkCollectFromHtmlToLevel(html, baseUrl, rootUrl, q, depth, state, nextLevel) {
   const linkRe = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))[^>]*>([\s\S]*?)<\/a>/gi;
   let m;
   while ((m = linkRe.exec(html)) !== null) {
@@ -726,13 +808,9 @@ function bulkCollectFromHtml(html, baseUrl, rootUrl, q, state) {
 
       if (!state.match && bulkIsFolderLink(href)) {
         const folderUrl = bulkNormalizeDirUrl(href);
-        if (
-          !state.visited.has(folderUrl) &&
-          state.depth + 1 <= BULK_CRAWL.maxDepth &&
-          state.queue.length < BULK_CRAWL.maxFolders
-        ) {
+        if (!state.visited.has(folderUrl) && depth + 1 <= BULK_CRAWL.maxDepth) {
           state.visited.add(folderUrl);
-          state.queue.push({ url: folderUrl, depth: state.depth + 1 });
+          nextLevel.push({ url: folderUrl, depth: depth + 1 });
         }
       }
     } catch {
@@ -741,45 +819,66 @@ function bulkCollectFromHtml(html, baseUrl, rootUrl, q, state) {
   }
 }
 
+async function bulkScanOneLevel(item, rootUrl, q, state) {
+  const nextLevel = [];
+  try {
+    const html = await bulkFetchFolderHtml(item.url);
+    bulkCollectFromHtmlToLevel(html, item.url, rootUrl, q, item.depth, state, nextLevel);
+    state.foldersScanned++;
+  } catch (e) {
+    state.lastDetail = e?.message || 'fetch failed';
+  }
+  return nextLevel;
+}
+
 async function searchFtpServerContent(baseUrl, query) {
   const q = String(query || '').trim().toLowerCase();
   if (!q || q.length < 2 || !/^https?:\/\//i.test(baseUrl)) {
     return { status: 'error', url: baseUrl, searchUrl: baseUrl, detail: 'bad input' };
   }
 
+  const endpointHit = await tryBulkSearchEndpoints(baseUrl, query);
+  if (endpointHit) return endpointHit;
+
   const rootUrl = bulkNormalizeDirUrl(baseUrl);
   const state = {
-    queue: [{ url: rootUrl, depth: 0 }],
     visited: new Set([rootUrl]),
     seen: new Set(),
     match: null,
-    depth: 0,
-    foldersScanned: 0
+    foldersScanned: 0,
+    lastDetail: ''
   };
-  let lastDetail = '';
+
+  let currentLevel = [{ url: rootUrl, depth: 0 }];
 
   while (
-    state.queue.length > 0 &&
+    currentLevel.length > 0 &&
     state.foldersScanned < BULK_CRAWL.maxFolders &&
     !state.match
   ) {
-    const item = state.queue.shift();
-    state.depth = item.depth;
-    try {
-      const html = await bulkFetchFolderHtml(item.url);
-      bulkCollectFromHtml(html, item.url, rootUrl, q, state);
-      state.foldersScanned++;
-      if (state.match) {
-        return {
-          status: 'found',
-          url: baseUrl,
-          searchUrl: state.match.href,
-          matchText: state.match.text
-        };
+    const nextLevel = [];
+    for (const item of currentLevel) {
+      if (state.foldersScanned >= BULK_CRAWL.maxFolders || state.match) break;
+      const children = await bulkScanOneLevel(item, rootUrl, q, state);
+      for (const child of children) {
+        if (!nextLevel.some((x) => x.url === child.url)) nextLevel.push(child);
       }
-    } catch (e) {
-      lastDetail = e?.message || 'fetch failed';
+      if (state.match) break;
     }
+    if (state.match) break;
+    currentLevel = nextLevel;
+  }
+
+  const lastDetail = state.lastDetail;
+
+  if (state.match) {
+    return {
+      status: 'found',
+      url: baseUrl,
+      searchUrl: state.match.href,
+      matchText: state.match.text,
+      via: 'crawl'
+    };
   }
 
   if (state.foldersScanned === 0 && lastDetail) {
