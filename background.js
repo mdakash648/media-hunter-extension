@@ -6,6 +6,7 @@
 const SERVER_LIST_URL = 'https://raw.githubusercontent.com/mdakash648/media-hunter-extension/main/serverList.json';
 const STORAGE_KEY = 'ftpScanData';
 const STORAGE_KEY_WORKING = 'ftpWorkingServers';
+const STORAGE_KEY_BULK_SEARCH = 'ftpBulkSearchData';
 const IDB_NAME = 'MediaHunterDB';
 const IDB_STORE = 'ftp';
 const IDB_KEY = 'ftpScanData';
@@ -18,6 +19,11 @@ let totalServers = 0;
 let doneCount = 0;
 let lastScanTime = null;
 let storageReady = false;
+
+let bulkSearchRunning = false;
+let bulkShouldStop = false;
+let bulkQuery = '';
+let bulkRows = [];
 
 // ---------- Storage helpers (Promise + error handling) ----------
 function storageGet(keys) {
@@ -185,6 +191,14 @@ async function saveResults(isFinal = false) {
 // Service Worker শুরুতেই storage থেকে restore
 (async () => {
   await restoreFromStorage();
+  await restoreBulkSearchState();
+  if (bulkSearchRunning && bulkQuery && bulkRows.some(r => r.status === 'pending' || r.status === 'scanning')) {
+    bulkRows.forEach((r) => { if (r.status === 'scanning') r.status = 'pending'; });
+    continueBulkSearchFromPending().catch(() => {});
+  } else if (bulkSearchRunning) {
+    bulkSearchRunning = false;
+    await saveBulkSearchState(false).catch(() => {});
+  }
   storageReady = true;
 })();
 
@@ -193,7 +207,7 @@ chrome.runtime.onInstalled.addListener(() => { restoreFromStorage(); });
 
 chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'keepAlive' && ftpScanning) { /* heartbeat */ }
+  if (alarm.name === 'keepAlive' && (ftpScanning || bulkSearchRunning)) { /* heartbeat */ }
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -261,6 +275,65 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     checkMediaLink(msg.url)
       .then(result => sendResponse(result))
       .catch(() => sendResponse({ working: false, method: '', status: 0, detail: 'error' }));
+    return true;
+  }
+
+  if (msg.action === 'ftpBulkSearchStart') {
+    (async () => {
+      if (bulkSearchRunning) {
+        sendResponse({ status: 'already_running', rows: bulkRows, query: bulkQuery, running: true });
+        return;
+      }
+      const q = String(msg.query || '').trim();
+      if (q.length < 2) {
+        sendResponse({ status: 'error', error: 'কমপক্ষে ২ অক্ষর লিখুন' });
+        return;
+      }
+      if (!storageReady || Object.keys(ftpResults).length === 0) {
+        await restoreFromStorage();
+      }
+      const urls = Object.entries(ftpResults)
+        .filter(([, info]) => info.status === 'working')
+        .map(([url]) => url);
+      if (!urls.length) {
+        sendResponse({ status: 'error', error: 'কোনো working সার্ভার নেই — আগে FTP স্ক্যান করুন' });
+        return;
+      }
+      startBulkFtpSearchJob(q, urls);
+      sendResponse({ status: 'started', rows: bulkRows, query: bulkQuery, running: true, total: urls.length });
+    })();
+    return true;
+  }
+
+  if (msg.action === 'ftpBulkSearchStop') {
+    bulkShouldStop = true;
+    saveBulkSearchState(false).catch(() => {});
+    sendResponse({ status: 'stopping' });
+    return true;
+  }
+
+  if (msg.action === 'ftpBulkSearchGetStatus') {
+    (async () => {
+      await restoreBulkSearchState();
+      sendResponse({
+        rows: bulkRows,
+        query: bulkQuery,
+        running: bulkSearchRunning,
+        done: bulkRows.filter(r => !['pending', 'scanning'].includes(r.status)).length,
+        total: bulkRows.length,
+        found: bulkRows.filter(r => r.status === 'found').length
+      });
+    })();
+    return true;
+  }
+
+  if (msg.action === 'ftpBulkSearchClear') {
+    bulkSearchRunning = false;
+    bulkShouldStop = false;
+    bulkQuery = '';
+    bulkRows = [];
+    chrome.storage.local.remove(STORAGE_KEY_BULK_SEARCH);
+    sendResponse({ status: 'cleared' });
     return true;
   }
 
@@ -414,6 +487,311 @@ async function checkFtpServer(url) {
 
 async function checkServer(url) {
   return checkFtpServer(url);
+}
+
+// ---------- Bulk FTP content search (background job + storage) ----------
+const BULK_SEARCH_MS = 15000;
+const BULK_TEXT_MAX = 768000;
+const BULK_FILE_EXT_RE = /\.(mp4|mkv|avi|mov|webm|mp3|flac|m4v|zip|rar|7z|iso|srt|ass|sub|wmv|ts|m2ts|mpg|mpeg)$/i;
+const BULK_CRAWL = { maxDepth: 6, maxFolders: 55 };
+
+async function saveBulkSearchState(running) {
+  await storageSet({
+    [STORAGE_KEY_BULK_SEARCH]: {
+      query: bulkQuery,
+      running: running !== undefined ? running : bulkSearchRunning,
+      rows: bulkRows,
+      updatedAt: new Date().toISOString()
+    }
+  }).catch((e) => console.warn('[Media Hunter] bulk search save failed:', e));
+}
+
+async function restoreBulkSearchState() {
+  try {
+    const data = await storageGet([STORAGE_KEY_BULK_SEARCH]);
+    const saved = data[STORAGE_KEY_BULK_SEARCH];
+    if (!saved?.rows?.length) return false;
+    bulkQuery = saved.query || '';
+    bulkRows = saved.rows;
+    bulkSearchRunning = !!saved.running;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function broadcastBulkProgress() {
+  const done = bulkRows.filter(r => !['pending', 'scanning'].includes(r.status)).length;
+  const found = bulkRows.filter(r => r.status === 'found').length;
+  broadcastToPopup({
+    action: 'bulkSearchProgress',
+    rows: bulkRows,
+    query: bulkQuery,
+    running: bulkSearchRunning,
+    done,
+    total: bulkRows.length,
+    found
+  });
+}
+
+async function runBulkSearchLoop(query, startIndex = 0) {
+  for (let i = startIndex; i < bulkRows.length; i++) {
+    if (bulkShouldStop) break;
+    if (bulkRows[i].status !== 'pending') continue;
+
+    bulkRows[i].status = 'scanning';
+    broadcastBulkProgress();
+
+    const result = await searchFtpServerContent(bulkRows[i].url, query);
+    bulkRows[i] = {
+      url: bulkRows[i].url,
+      status: result.status || 'error',
+      searchUrl: result.searchUrl || bulkRows[i].url,
+      matchText: result.matchText || '',
+      detail: result.detail || ''
+    };
+
+    await saveBulkSearchState(true);
+    broadcastBulkProgress();
+  }
+
+  bulkSearchRunning = false;
+  await saveBulkSearchState(false);
+  broadcastToPopup({
+    action: 'bulkSearchDone',
+    rows: bulkRows,
+    query: bulkQuery,
+    running: false,
+    done: bulkRows.filter(r => !['pending', 'scanning'].includes(r.status)).length,
+    total: bulkRows.length,
+    found: bulkRows.filter(r => r.status === 'found').length,
+    stopped: bulkShouldStop
+  });
+}
+
+async function startBulkFtpSearchJob(query, urls) {
+  bulkSearchRunning = true;
+  bulkShouldStop = false;
+  bulkQuery = query;
+  bulkRows = urls.map((url) => ({
+    url,
+    status: 'pending',
+    searchUrl: url,
+    matchText: '',
+    detail: ''
+  }));
+
+  await saveBulkSearchState(true);
+  broadcastBulkProgress();
+  await runBulkSearchLoop(query, 0);
+}
+
+async function continueBulkSearchFromPending() {
+  bulkSearchRunning = true;
+  bulkShouldStop = false;
+  const startIndex = bulkRows.findIndex((r) => r.status === 'pending');
+  if (startIndex < 0) {
+    bulkSearchRunning = false;
+    await saveBulkSearchState(false);
+    return;
+  }
+  await saveBulkSearchState(true);
+  broadcastBulkProgress();
+  await runBulkSearchLoop(bulkQuery, startIndex);
+}
+
+function bulkSafeDecode(str) {
+  if (str == null || str === '') return '';
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    try {
+      return String(str).replace(/%(?:[0-9A-Fa-f]{2})+/g, (seq) => {
+        try { return decodeURIComponent(seq); } catch { return seq; }
+      });
+    } catch {
+      return String(str);
+    }
+  }
+}
+
+function bulkHrefSearchText(href) {
+  try {
+    const u = new URL(href);
+    return `${u.hostname}${bulkSafeDecode(u.pathname)}${bulkSafeDecode(u.search)}`;
+  } catch {
+    return bulkSafeDecode(href);
+  }
+}
+
+function bulkNormalizeDirUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!u.pathname.endsWith('/')) {
+      const last = u.pathname.split('/').pop() || '';
+      if (last.includes('.') && !last.endsWith('/')) {
+        u.pathname = u.pathname.slice(0, u.pathname.lastIndexOf('/') + 1);
+      } else {
+        u.pathname += '/';
+      }
+    }
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function bulkIsUnderRoot(href, rootUrl) {
+  try {
+    const u = new URL(href, rootUrl);
+    const root = new URL(rootUrl);
+    return u.origin === root.origin && u.pathname.startsWith(root.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function bulkIsParentLink(href, text) {
+  const t = (text || '').toLowerCase();
+  if (/parent|\.\.\/|up to/i.test(t)) return true;
+  try {
+    const path = new URL(href).pathname;
+    return path.endsWith('/../') || path.includes('/..');
+  } catch {
+    return false;
+  }
+}
+
+function bulkIsFolderLink(href) {
+  try {
+    const u = new URL(href);
+    if (u.pathname.endsWith('/')) return true;
+    const last = u.pathname.split('/').filter(Boolean).pop() || '';
+    if (!last) return true;
+    if (/^index\.(html?|php|asp|jsp)$/i.test(last)) return false;
+    if (BULK_FILE_EXT_RE.test(last)) return false;
+    return !last.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+function bulkMatchesQuery(text, href, q) {
+  const searchIn = (bulkSafeDecode(text) + ' ' + bulkHrefSearchText(href)).toLowerCase();
+  return searchIn.includes(q);
+}
+
+function bulkStripHtmlTags(s) {
+  return String(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function bulkFetchFolderHtml(url) {
+  const res = await fetchWithTimeout(url, { method: 'GET', timeout: BULK_SEARCH_MS });
+  if (!res.ok && res.status >= 400 && res.status !== 403) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const buf = await res.arrayBuffer();
+  const len = Math.min(buf.byteLength, BULK_TEXT_MAX);
+  return new TextDecoder('utf-8', { fatal: false }).decode(buf.slice(0, len));
+}
+
+function bulkCollectFromHtml(html, baseUrl, rootUrl, q, state) {
+  const linkRe = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = linkRe.exec(html)) !== null) {
+    if (state.match) break;
+    try {
+      const rawHref = (m[1] || m[2] || m[3] || '').trim();
+      if (!rawHref || rawHref === '#') continue;
+
+      let href;
+      try {
+        href = new URL(rawHref, baseUrl).href;
+      } catch {
+        continue;
+      }
+
+      const rawText = bulkStripHtmlTags(m[4]);
+      if (!rawText || href.startsWith('javascript') || href.startsWith('mailto:')) continue;
+      if (!bulkIsUnderRoot(href, rootUrl)) continue;
+      if (bulkIsParentLink(href, rawText)) continue;
+
+      const text = bulkSafeDecode(rawText);
+
+      if (bulkMatchesQuery(text, href, q) && !state.seen.has(href)) {
+        state.seen.add(href);
+        state.match = { href, text };
+        break;
+      }
+
+      if (!state.match && bulkIsFolderLink(href)) {
+        const folderUrl = bulkNormalizeDirUrl(href);
+        if (
+          !state.visited.has(folderUrl) &&
+          state.depth + 1 <= BULK_CRAWL.maxDepth &&
+          state.queue.length < BULK_CRAWL.maxFolders
+        ) {
+          state.visited.add(folderUrl);
+          state.queue.push({ url: folderUrl, depth: state.depth + 1 });
+        }
+      }
+    } catch {
+      /* skip */
+    }
+  }
+}
+
+async function searchFtpServerContent(baseUrl, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q || q.length < 2 || !/^https?:\/\//i.test(baseUrl)) {
+    return { status: 'error', url: baseUrl, searchUrl: baseUrl, detail: 'bad input' };
+  }
+
+  const rootUrl = bulkNormalizeDirUrl(baseUrl);
+  const state = {
+    queue: [{ url: rootUrl, depth: 0 }],
+    visited: new Set([rootUrl]),
+    seen: new Set(),
+    match: null,
+    depth: 0,
+    foldersScanned: 0
+  };
+  let lastDetail = '';
+
+  while (
+    state.queue.length > 0 &&
+    state.foldersScanned < BULK_CRAWL.maxFolders &&
+    !state.match
+  ) {
+    const item = state.queue.shift();
+    state.depth = item.depth;
+    try {
+      const html = await bulkFetchFolderHtml(item.url);
+      bulkCollectFromHtml(html, item.url, rootUrl, q, state);
+      state.foldersScanned++;
+      if (state.match) {
+        return {
+          status: 'found',
+          url: baseUrl,
+          searchUrl: state.match.href,
+          matchText: state.match.text
+        };
+      }
+    } catch (e) {
+      lastDetail = e?.message || 'fetch failed';
+    }
+  }
+
+  if (state.foldersScanned === 0 && lastDetail) {
+    return { status: 'error', url: baseUrl, searchUrl: rootUrl, detail: lastDetail };
+  }
+
+  return {
+    status: 'not_found',
+    url: baseUrl,
+    searchUrl: rootUrl,
+    detail: lastDetail
+  };
 }
 
 function broadcastToPopup(msg) {

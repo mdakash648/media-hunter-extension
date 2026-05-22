@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Media Hunter",
-  "version": "13.0.0",
-  "description": "Media scan, FTP search, FTP server scan, M3U upload & download — Developed by : Md Akash",
+  "version": "13.2.0",
+  "description": "Media scan, FTP search, bulk FTP content search, FTP server scan, M3U — Developed by : Md Akash",
   "permissions": [
     "activeTab",
     "scripting",

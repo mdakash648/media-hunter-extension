@@ -11,6 +11,7 @@ function switchMainTab(tab) {
   document.getElementById('tabFtpBtn').classList.toggle('active', tab === 'ftp');
   document.getElementById('tabM3uBtn').classList.toggle('active', tab === 'm3u');
   if (tab === 'ftp') initFtpPanel();
+  if (tab === 'ftpSearch') initFtpSearchPanel();
   if (tab === 'media' && allMediaItems.length === 0) doMediaScan();
 }
 
@@ -281,9 +282,79 @@ async function doMediaScan() {
 }
 
 // ===========================
-// FTP DEEP SEARCH (subfolders)
+// FTP DEEP SEARCH (subfolders) + BULK SEARCH (working servers)
 // ===========================
 let ftpSearchProgressHandler = null;
+let bulkFtpSearchRows = [];
+let bulkFtpSearchRunning = false;
+
+function isBulkFtpSearchOn() {
+  return document.getElementById('bulkFtpToggle')?.checked === true;
+}
+
+function getWorkingFtpUrls() {
+  return Object.entries(ftpResultsCache)
+    .filter(([, info]) => info.status === 'working')
+    .map(([url]) => url);
+}
+
+function updateBulkWorkingHint() {
+  const hint = document.getElementById('bulkWorkingHint');
+  const info = document.getElementById('currentPageUrl');
+  const working = getWorkingFtpUrls().length;
+
+  if (hint) {
+    hint.textContent = isBulkFtpSearchOn() ? `${working} working` : '';
+  }
+  if (info) {
+    info.textContent = isBulkFtpSearchOn()
+      ? `Bulk — FTP স্ক্যানের ${working}টি working সার্ভার`
+      : 'Deep Search — সাবফোল্ডার সহ খুঁজবে';
+  }
+}
+
+function setBulkSearchBtnState(scanning) {
+  const searchBtn = document.getElementById('searchBtn');
+  if (!searchBtn) return;
+  bulkFtpSearchRunning = scanning;
+  searchBtn.textContent = scanning ? '⏹ বন্ধ' : '🔍 খোঁজো';
+  searchBtn.disabled = false;
+}
+
+function applyBulkSearchStatus(resp) {
+  if (!resp) return;
+  bulkFtpSearchRows = resp.rows || [];
+  if (resp.query) {
+    const input = document.getElementById('searchInput');
+    if (input) input.value = resp.query;
+  }
+  setBulkSearchBtnState(!!resp.running);
+  const info = document.getElementById('currentPageUrl');
+  if (info && isBulkFtpSearchOn()) {
+    if (resp.running) {
+      const done = resp.done ?? bulkFtpSearchRows.filter(r => !['pending', 'scanning'].includes(r.status)).length;
+      const total = resp.total ?? bulkFtpSearchRows.length;
+      info.textContent = `🔄 Background সার্চ ${done}/${total} — পপআপ বন্ধ করলেও চলবে`;
+    } else {
+      updateBulkWorkingHint();
+    }
+  }
+  if (bulkFtpSearchRows.length) renderBulkFtpResults();
+}
+
+function syncBulkSearchFromBackground() {
+  chrome.runtime.sendMessage({ action: 'ftpBulkSearchGetStatus' }, (resp) => {
+    if (chrome.runtime.lastError || !resp) return;
+    applyBulkSearchStatus(resp);
+  });
+}
+
+function initFtpSearchPanel() {
+  loadFtpDirectFromStorage(() => {
+    updateBulkWorkingHint();
+    syncBulkSearchFromBackground();
+  });
+}
 
 function onFtpSearchProgress(msg) {
   if (msg.action !== 'ftpSearchProgress') return;
@@ -293,11 +364,129 @@ function onFtpSearchProgress(msg) {
   }
 }
 
+const bulkStatusLabels = {
+  pending: '⏳ অপেক্ষা',
+  scanning: '🔄 স্ক্যান...',
+  found: '✅ পাওয়া গেছে',
+  not_found: '❌ নেই',
+  error: '⚠️ এরর'
+};
+
+function renderBulkFtpResults() {
+  const searchResults = document.getElementById('searchResults');
+  const searchResultCount = document.getElementById('searchResultCount');
+  const total = bulkFtpSearchRows.length;
+  const done = bulkFtpSearchRows.filter(r => !['pending', 'scanning'].includes(r.status)).length;
+  const found = bulkFtpSearchRows.filter(r => r.status === 'found').length;
+
+  if (searchResultCount) {
+    searchResultCount.textContent = total
+      ? `${done}/${total} · ${found} পাওয়া গেছে`
+      : '';
+  }
+
+  if (!total) {
+    searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">🖥️</div><div class="state-title">কোনো working সার্ভার নেই</div><div class="state-sub">আগে FTP স্ক্যান ট্যাবে স্ক্যান চালান</div></div>`;
+    return;
+  }
+
+  searchResults.innerHTML = '';
+  bulkFtpSearchRows.forEach((row) => {
+    const card = document.createElement('div');
+    card.className = `bulk-result-card status-${row.status}`;
+    const safeUrl = escAttr(row.url);
+    const openTarget = escAttr(row.searchUrl || row.url);
+    const labelClass = `bulk-status-label ${row.status}`;
+    const matchHint = row.matchText ? ` · ${row.matchText}` : '';
+    const urlHtml = row.status === 'found'
+      ? `<a class="bulk-url is-found" href="${openTarget}" title="${escAttr(row.matchText || row.url)}">${row.url}</a>`
+      : `<span class="bulk-url" title="${safeUrl}">${row.url}</span>`;
+
+    card.innerHTML = `
+      <span class="bulk-dot ${row.status}"></span>
+      <div class="bulk-result-body">
+        ${urlHtml}
+        <span class="${labelClass}">${bulkStatusLabels[row.status] || row.status}${matchHint}${row.detail && row.status === 'error' ? ' · ' + row.detail : ''}</span>
+      </div>`;
+
+    if (row.status === 'found') {
+      card.querySelector('.bulk-url.is-found')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        chrome.tabs.create({ url: row.searchUrl || row.url });
+      });
+    }
+
+    if (row.status === 'found') {
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'bulk-open-btn';
+      openBtn.textContent = '↗ খুলুন';
+      openBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: row.searchUrl || row.url });
+      });
+      card.appendChild(openBtn);
+    } else if (row.status === 'scanning') {
+      const mini = document.createElement('div');
+      mini.className = 'spinner';
+      mini.style.cssText = 'width:14px;height:14px;border-width:2px;flex-shrink:0';
+      card.appendChild(mini);
+    }
+
+    searchResults.appendChild(card);
+  });
+}
+
+function startBulkFtpSearchInBackground(query) {
+  const searchResults = document.getElementById('searchResults');
+  searchResults.innerHTML = `<div class="state-msg"><div class="spinner"></div><div class="state-title">Background Bulk সার্চ...</div><div class="state-sub">পপআপ বন্ধ করলেও চলবে — আবার খুলে ফলাফল দেখুন</div></div>`;
+
+  chrome.runtime.sendMessage({ action: 'ftpBulkSearchStart', query }, (resp) => {
+    if (chrome.runtime.lastError) {
+      showToast('⚠️ সার্চ শুরু হয়নি');
+      return;
+    }
+    if (resp?.status === 'error') {
+      showToast('⚠️ ' + (resp.error || 'সার্চ শুরু হয়নি'));
+      if (resp.error?.includes('working')) {
+        searchResults.innerHTML = `<div class="state-msg"><div class="state-icon">🖥️</div><div class="state-title">Working সার্ভার নেই</div><div class="state-sub">FTP স্ক্যান ট্যাবে স্ক্যান চালান</div></div>`;
+      }
+      return;
+    }
+    if (resp?.status === 'already_running') {
+      showToast('ℹ️ সার্চ ইতিমধ্যে চলছে');
+      applyBulkSearchStatus(resp);
+      return;
+    }
+    applyBulkSearchStatus(resp);
+    showToast('🔍 Background সার্চ শুরু — পপআপ বন্ধ করতে পারেন');
+  });
+}
+
 async function doFtpSearch() {
   const query = document.getElementById('searchInput').value.trim();
   if (!query) { showToast('কিছু লিখুন!'); return; }
 
   const searchBtn = document.getElementById('searchBtn');
+
+  if (bulkFtpSearchRunning) {
+    chrome.runtime.sendMessage({ action: 'ftpBulkSearchStop' });
+    setBulkSearchBtnState(false);
+    showToast('⏹ সার্চ বন্ধ হচ্ছে...');
+    return;
+  }
+
+  if (isBulkFtpSearchOn()) {
+    if (query.length < 2) {
+      showToast('⚠️ কমপক্ষে ২ অক্ষর লিখুন');
+      return;
+    }
+    if (Object.keys(ftpResultsCache).length === 0) {
+      await new Promise((resolve) => loadFtpDirectFromStorage(() => resolve()));
+    }
+    startBulkFtpSearchInBackground(query);
+    return;
+  }
+
   const searchResults = document.getElementById('searchResults');
   const searchResultCount = document.getElementById('searchResultCount');
 
@@ -512,10 +701,24 @@ function loadFtpFromStorage() {
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.action === 'bulkSearchProgress' || msg.action === 'bulkSearchDone') {
+    applyBulkSearchStatus(msg);
+    if (msg.action === 'bulkSearchDone') {
+      const found = msg.found || 0;
+      const total = msg.total || 0;
+      if (msg.stopped) {
+        showToast(`⏹ বন্ধ — ${found} টি পাওয়া গেছে`);
+      } else {
+        showToast(found ? `✅ ${found}/${total} সার্ভারে পাওয়া গেছে` : `😕 ${total} সার্ভারে পাওয়া যায়নি`);
+      }
+    }
+  }
+
   if (msg.action === 'ftpProgress' || msg.action === 'ftpScanDone') {
     ftpResultsCache = msg.results || {};
     updateFtpUI(msg.scanning, msg.done || 0, msg.total || 0);
     renderFtpList();
+    updateBulkWorkingHint();
     if (msg.action === 'ftpScanDone') {
       showToast('✅ স্ক্যান সম্পন্ন!');
       setScanBtnState(false);
@@ -922,6 +1125,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('searchBtn').addEventListener('click', doFtpSearch);
   document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') doFtpSearch(); });
+  document.getElementById('bulkFtpToggle')?.addEventListener('change', updateBulkWorkingHint);
+  initFtpSearchPanel();
 
   document.getElementById('ftpScanBtn').addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'ftpStartScan' }, (resp) => {

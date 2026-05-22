@@ -352,6 +352,128 @@ body {
 }
 .btn-open-link:hover { background: rgba(105,255,71,0.18); }
 
+/* Bulk FTP search toggle + results */
+.bulk-search-row {
+  padding: 8px 14px 6px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.bulk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  flex: 1;
+  min-width: 0;
+}
+.bulk-toggle input { display: none; }
+.bulk-toggle-slider {
+  width: 36px; height: 20px;
+  background: var(--border);
+  border-radius: 10px;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.bulk-toggle-slider::after {
+  content: '';
+  position: absolute;
+  width: 14px; height: 14px;
+  background: var(--muted);
+  border-radius: 50%;
+  top: 3px; left: 3px;
+  transition: transform 0.2s, background 0.2s;
+}
+.bulk-toggle input:checked + .bulk-toggle-slider {
+  background: rgba(255,64,129,0.35);
+}
+.bulk-toggle input:checked + .bulk-toggle-slider::after {
+  transform: translateX(16px);
+  background: var(--accent2);
+}
+.bulk-toggle-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bulk-hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--accent3);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.bulk-result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.bulk-result-card.status-found { border-color: rgba(105,255,71,0.45); }
+.bulk-result-card.status-not_found { opacity: 0.72; }
+.bulk-result-card.status-error { opacity: 0.65; border-color: rgba(255,64,129,0.25); }
+.bulk-result-card.status-scanning { border-color: rgba(255,190,0,0.35); }
+.bulk-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.bulk-dot.pending { background: var(--muted); }
+.bulk-dot.scanning { background: var(--accent4); animation: pulse 1s ease-in-out infinite; }
+.bulk-dot.found { background: var(--accent3); box-shadow: 0 0 6px var(--accent3); }
+.bulk-dot.not_found { background: var(--muted); }
+.bulk-dot.error { background: var(--accent2); }
+.bulk-result-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.bulk-url {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  color: var(--muted);
+}
+.bulk-url.is-found { color: var(--accent3); font-weight: 700; }
+.bulk-url.is-found:hover { text-decoration: underline; }
+.bulk-status-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.bulk-status-label.found { color: var(--accent3); }
+.bulk-status-label.not_found { color: var(--muted); }
+.bulk-status-label.error { color: var(--accent2); }
+.bulk-status-label.scanning { color: var(--accent4); }
+.bulk-status-label.pending { color: var(--muted); }
+.bulk-open-btn {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(105,255,71,0.35);
+  background: rgba(105,255,71,0.08);
+  color: var(--accent3);
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.bulk-open-btn:hover { background: rgba(105,255,71,0.2); }
+
 /* ===================== FTP SCAN TAB ===================== */
 .ftp-header {
   background: var(--surface);
@@ -725,6 +847,14 @@ body {
            placeholder="Movie/Series নাম (যেমন: Inception)"
            autocomplete="off" />
     <button class="btn-search" id="searchBtn">🔍 খোঁজো</button>
+  </div>
+  <div class="bulk-search-row">
+    <label class="bulk-toggle" for="bulkFtpToggle">
+      <input type="checkbox" id="bulkFtpToggle" />
+      <span class="bulk-toggle-slider"></span>
+      <span class="bulk-toggle-label">সব Working সার্ভারে Bulk সার্চ</span>
+    </label>
+    <span class="bulk-hint" id="bulkWorkingHint"></span>
   </div>
   <div class="search-info">
     <span id="currentPageUrl">Deep Search — সাবফোল্ডার সহ খুঁজবে</span>
