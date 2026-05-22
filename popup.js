@@ -6,12 +6,15 @@ function switchMainTab(tab) {
   document.getElementById('panelFtpSearch').classList.toggle('active', tab === 'ftpSearch');
   document.getElementById('panelFtp').classList.toggle('active', tab === 'ftp');
   document.getElementById('panelM3u').classList.toggle('active', tab === 'm3u');
+  document.getElementById('panelFav').classList.toggle('active', tab === 'fav');
   document.getElementById('tabMediaBtn').classList.toggle('active', tab === 'media');
   document.getElementById('tabFtpSearchBtn').classList.toggle('active', tab === 'ftpSearch');
   document.getElementById('tabFtpBtn').classList.toggle('active', tab === 'ftp');
   document.getElementById('tabM3uBtn').classList.toggle('active', tab === 'm3u');
+  document.getElementById('tabFavBtn').classList.toggle('active', tab === 'fav');
   if (tab === 'ftp') initFtpPanel();
   if (tab === 'ftpSearch') initFtpSearchPanel();
+  if (tab === 'fav') { loadFavData(() => renderFavList()); }
   if (tab === 'media' && allMediaItems.length === 0) doMediaScan();
 }
 
@@ -700,6 +703,306 @@ function renderSearchResults(results, query, meta = {}) {
 }
 
 // ===========================
+// FAVORITES
+// ===========================
+// ===========================
+// FAVORITES
+// ===========================
+const DEFAULT_FAV_CATEGORIES = [
+  { id: 'bangla',      label: '🟢 বাংলা',      custom: false },
+];
+
+let favCategories = [...DEFAULT_FAV_CATEGORIES]; // includes custom ones
+let favData = {};
+let favCurrentCat = 'ALL';
+
+function getAllFavCategories() { return favCategories; }
+
+function getCatInfo(id) {
+  return favCategories.find(c => c.id === id) || { id, label: id, custom: true };
+}
+
+function loadFavData(callback) {
+  chrome.storage.local.get(['favData', 'favCategories'], (data) => {
+    if (!chrome.runtime.lastError) {
+      if (data.favData) favData = data.favData;
+      else favData = {};
+      if (Array.isArray(data.favCategories) && data.favCategories.length) {
+        // merge: keep defaults + stored custom categories
+        const customCats = data.favCategories.filter(c => c.custom);
+        favCategories = [...DEFAULT_FAV_CATEGORIES, ...customCats];
+      }
+    }
+    favCategories.forEach(c => { if (!favData[c.id]) favData[c.id] = []; });
+    if (callback) callback();
+  });
+}
+
+function saveFavData() {
+  chrome.storage.local.set({ favData, favCategories });
+}
+
+function isFaved(url) {
+  return favCategories.some(c => (favData[c.id] || []).some(item => item.url === url));
+}
+
+function addToFav(url, catId) {
+  if (!favData[catId]) favData[catId] = [];
+  if (!favData[catId].some(item => item.url === url)) {
+    favData[catId].push({ url, addedAt: Date.now() });
+    saveFavData();
+  }
+}
+
+function removeFromFav(url) {
+  favCategories.forEach(c => {
+    if (favData[c.id]) favData[c.id] = favData[c.id].filter(i => i.url !== url);
+  });
+  saveFavData();
+}
+
+function addCustomCategory(label) {
+  const id = 'custom_' + Date.now();
+  favCategories.push({ id, label: '🏷️ ' + label, custom: true });
+  favData[id] = [];
+  saveFavData();
+  return id;
+}
+
+function deleteCustomCategory(id) {
+  favCategories = favCategories.filter(c => c.id !== id);
+  delete favData[id];
+  saveFavData();
+}
+
+// ── Category Modal (with + New Category option) ──
+function showCategoryModal(url, onSelect) {
+  const overlay = document.createElement('div');
+  overlay.className = 'cat-modal-overlay';
+  overlay.innerHTML = `
+    <div class="cat-modal">
+      <div class="cat-modal-title">⭐ Category বেছে নিন</div>
+      <div class="cat-modal-url">${url}</div>
+      <div class="cat-btn-list" id="catBtnList">
+        ${favCategories.map(c => `
+          <button class="cat-btn" data-cat="${escAttr(c.id)}">${c.label}</button>
+        `).join('')}
+      </div>
+      <div class="cat-new-row" id="catNewRow" style="display:none">
+        <input class="cat-new-input" id="catNewInput" type="text" placeholder="Category নাম লিখুন..." maxlength="30" />
+        <button class="cat-new-save-btn" id="catNewSaveBtn">✅</button>
+        <button class="cat-new-cancel-btn" id="catNewCancelBtn">✕</button>
+      </div>
+      <button class="cat-add-new-btn" id="catAddNewBtn">➕ নতুন Category যোগ করুন</button>
+      <button class="cat-modal-cancel">বাতিল করুন</button>
+    </div>`;
+
+  // category select
+  overlay.querySelectorAll('.cat-btn').forEach(btn => {
+    btn.addEventListener('click', () => { onSelect(btn.dataset.cat); overlay.remove(); });
+  });
+
+  // show new category input
+  overlay.querySelector('#catAddNewBtn').addEventListener('click', () => {
+    overlay.querySelector('#catNewRow').style.display = 'flex';
+    overlay.querySelector('#catAddNewBtn').style.display = 'none';
+    overlay.querySelector('#catNewInput').focus();
+  });
+
+  overlay.querySelector('#catNewCancelBtn').addEventListener('click', () => {
+    overlay.querySelector('#catNewRow').style.display = 'none';
+    overlay.querySelector('#catAddNewBtn').style.display = 'block';
+    overlay.querySelector('#catNewInput').value = '';
+  });
+
+  const doSaveNew = () => {
+    const val = overlay.querySelector('#catNewInput').value.trim();
+    if (!val) { showToast('⚠️ নাম লিখুন'); return; }
+    const newId = addCustomCategory(val);
+    renderFavCatTabs();
+    onSelect(newId);
+    overlay.remove();
+    showToast(`✅ "${val}" category তৈরি হয়েছে`);
+  };
+  overlay.querySelector('#catNewSaveBtn').addEventListener('click', doSaveNew);
+  overlay.querySelector('#catNewInput').addEventListener('keydown', e => { if (e.key === 'Enter') doSaveNew(); });
+
+  overlay.querySelector('.cat-modal-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+// ── Render cat tabs in Favorites panel (dynamic) ──
+function renderFavCatTabs() {
+  const tabsEl = document.getElementById('favCatTabs');
+  if (!tabsEl) return;
+  tabsEl.innerHTML = `<button class="fav-cat-tab${favCurrentCat === 'ALL' ? ' active' : ''}" data-fav-cat="ALL">সব</button>`;
+
+  favCategories.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'fav-cat-tab' + (favCurrentCat === c.id ? ' active' : '');
+    btn.dataset.favCat = c.id;
+    btn.textContent = c.label;
+    tabsEl.appendChild(btn);
+  });
+
+  // "+ নতুন" tab button
+  const addBtn = document.createElement('button');
+  addBtn.className = 'fav-cat-tab fav-add-cat-tab';
+  addBtn.textContent = '＋';
+  addBtn.title = 'নতুন Category';
+  tabsEl.appendChild(addBtn);
+
+  // re-bind tab clicks
+  tabsEl.querySelectorAll('.fav-cat-tab:not(.fav-add-cat-tab)').forEach(tab => {
+    tab.addEventListener('click', () => {
+      favCurrentCat = tab.dataset.favCat;
+      renderFavCatTabs();
+      renderFavList();
+    });
+  });
+
+  addBtn.addEventListener('click', () => showAddCatModal());
+}
+
+// ── Small "add category" modal (from Favorites panel) ──
+function showAddCatModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'cat-modal-overlay';
+  overlay.innerHTML = `
+    <div class="cat-modal">
+      <div class="cat-modal-title">➕ নতুন Category</div>
+      <div class="cat-new-row" style="display:flex; margin-top:4px">
+        <input class="cat-new-input" id="addCatInput" type="text" placeholder="Category নাম লিখুন..." maxlength="30" />
+      </div>
+      <button class="cat-btn" id="addCatSaveBtn" style="margin-top:4px">✅ তৈরি করুন</button>
+      <button class="cat-modal-cancel">বাতিল করুন</button>
+    </div>`;
+
+  const doCreate = () => {
+    const val = overlay.querySelector('#addCatInput').value.trim();
+    if (!val) { showToast('⚠️ নাম লিখুন'); return; }
+    addCustomCategory(val);
+    renderFavCatTabs();
+    renderFavList();
+    overlay.remove();
+    showToast(`✅ "${val}" category তৈরি হয়েছে`);
+  };
+  overlay.querySelector('#addCatSaveBtn').addEventListener('click', doCreate);
+  overlay.querySelector('#addCatInput').addEventListener('keydown', e => { if (e.key === 'Enter') doCreate(); });
+  overlay.querySelector('.cat-modal-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  setTimeout(() => overlay.querySelector('#addCatInput').focus(), 50);
+  document.body.appendChild(overlay);
+}
+
+// ── Render favorites list ──
+function renderFavList() {
+  const list = document.getElementById('favList');
+  const badge = document.getElementById('favCountBadge');
+  if (!list) return;
+
+  let items = [];
+  if (favCurrentCat === 'ALL') {
+    favCategories.forEach(c => {
+      (favData[c.id] || []).forEach(item => items.push({ ...item, cat: c.id }));
+    });
+  } else {
+    (favData[favCurrentCat] || []).forEach(item => items.push({ ...item, cat: favCurrentCat }));
+  }
+
+  if (badge) badge.textContent = items.length + ' টি';
+
+  if (!items.length) {
+    const isCustomEmpty = favCurrentCat !== 'ALL' && getCatInfo(favCurrentCat)?.custom;
+    list.innerHTML = `<div class="state-msg">
+      <div class="state-icon">⭐</div>
+      <div class="state-title">কোনো ফেভারিট নেই</div>
+      <div class="state-sub">FTP স্ক্যান থেকে ⭐ বাটন চাপুন</div>
+      ${isCustomEmpty ? `<button class="fav-del-cat-btn" id="delThisCatBtn">🗑 এই Category মুছুন</button>` : ''}
+    </div>`;
+    document.getElementById('delThisCatBtn')?.addEventListener('click', () => {
+      deleteCustomCategory(favCurrentCat);
+      favCurrentCat = 'ALL';
+      renderFavCatTabs();
+      renderFavList();
+      showToast('🗑 Category মুছে গেছে');
+    });
+    return;
+  }
+
+  list.innerHTML = '';
+
+  // show delete button for custom category (top)
+  const catInf = getCatInfo(favCurrentCat);
+  if (favCurrentCat !== 'ALL' && catInf?.custom) {
+    const delRow = document.createElement('div');
+    delRow.className = 'fav-custom-cat-row';
+    delRow.innerHTML = `<span class="fav-custom-cat-label">${catInf.label}</span>
+      <button class="fav-del-cat-btn" id="delThisCatBtn">🗑 Category মুছুন</button>`;
+    delRow.querySelector('#delThisCatBtn').addEventListener('click', () => {
+      deleteCustomCategory(favCurrentCat);
+      favCurrentCat = 'ALL';
+      renderFavCatTabs();
+      renderFavList();
+      renderFtpList();
+      showToast('🗑 Category মুছে গেছে');
+    });
+    list.appendChild(delRow);
+  }
+
+  items.forEach(item => {
+    const cInfo = getCatInfo(item.cat);
+    const card = document.createElement('div');
+    card.className = 'fav-card';
+    card.innerHTML = `
+      <span class="fav-cat-badge custom-cat" style="background:rgba(255,190,0,0.12);color:var(--accent4)">${cInfo?.label || item.cat}</span>
+      <span class="fav-card-url">${item.url}</span>
+      <div class="fav-card-actions">
+        <button class="fav-copy-btn" data-url="${escAttr(item.url)}">📋</button>
+        <button class="fav-open-btn" data-url="${escAttr(item.url)}">↗</button>
+        <button class="fav-del-btn" data-url="${escAttr(item.url)}">🗑</button>
+      </div>`;
+
+    card.querySelector('.fav-copy-btn').addEventListener('click', e => {
+      navigator.clipboard.writeText(e.currentTarget.dataset.url);
+      showToast('✅ কপি হয়েছে!');
+    });
+    card.querySelector('.fav-open-btn').addEventListener('click', e => {
+      chrome.tabs.create({ url: e.currentTarget.dataset.url });
+    });
+    card.querySelector('.fav-del-btn').addEventListener('click', e => {
+      removeFromFav(e.currentTarget.dataset.url);
+      renderFavList();
+      renderFtpList();
+      showToast('🗑 সরানো হয়েছে');
+    });
+
+    list.appendChild(card);
+  });
+}
+
+function initFavPanel() {
+  loadFavData(() => {
+    renderFavCatTabs();
+    renderFavList();
+  });
+
+  document.getElementById('clearFavCatBtn')?.addEventListener('click', () => {
+    if (favCurrentCat === 'ALL') {
+      favCategories.forEach(c => { favData[c.id] = []; });
+      showToast('🗑 সব ফেভারিট ক্লিয়ার হয়েছে');
+    } else {
+      favData[favCurrentCat] = [];
+      showToast(`🗑 ${getCatInfo(favCurrentCat)?.label} ক্লিয়ার হয়েছে`);
+    }
+    saveFavData();
+    renderFavList();
+    renderFtpList();
+  });
+}
+
+// ===========================
 // FTP SCAN — popup side
 // ===========================
 let ftpCurrentFilter = 'ALL';
@@ -711,7 +1014,6 @@ function loadVisitedFtpUrls() {
     if (!chrome.runtime.lastError && Array.isArray(data.ftpVisitedUrls)) {
       visitedFtpUrls = new Set(data.ftpVisitedUrls);
     }
-    renderFtpList();
   });
 }
 
@@ -932,6 +1234,7 @@ function renderFtpList() {
   filtered.forEach(([url, info]) => {
     const card = document.createElement('div');
     const isVisited = visitedFtpUrls.has(url);
+    const isFavored = isFaved(url);
     card.className = `ftp-card status-${info.status}${isVisited ? ' visited' : ''}`;
     const statusLabels = { working: '✅ Working', dead: '❌ Dead', scanning: '🔄 Scanning', pending: '⏳ Pending' };
     card.innerHTML = `
@@ -939,8 +1242,29 @@ function renderFtpList() {
       <span class="ftp-card-url">${url}</span>
       <span class="ftp-card-status ${info.status}">${statusLabels[info.status] || info.status}</span>
       ${isVisited ? `<span class="ftp-visited-badge">✔ ভিজিটেড</span>` : ''}
-      ${info.status === 'working' ? `<button class="ftp-visit-btn" data-url="${url}">🌐 ভিজিট</button>` : ''}`;
+      <button class="ftp-fav-btn${isFavored ? ' saved' : ''}" data-url="${escAttr(url)}" title="ফেভারিটে যোগ করুন">${isFavored ? '⭐' : '☆'}</button>
+      ${info.status === 'working' ? `<button class="ftp-visit-btn" data-url="${escAttr(url)}">🌐 ভিজিট</button>` : ''}`;
     list.appendChild(card);
+  });
+
+  list.querySelectorAll('.ftp-fav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const url = btn.dataset.url;
+      if (isFaved(url)) {
+        removeFromFav(url);
+        btn.textContent = '☆';
+        btn.classList.remove('saved');
+        showToast('🗑 ফেভারিট থেকে সরানো হয়েছে');
+      } else {
+        showCategoryModal(url, (catId) => {
+          addToFav(url, catId);
+          btn.textContent = '⭐';
+          btn.classList.add('saved');
+          const catInfo = FAV_CATEGORIES.find(c => c.id === catId);
+          showToast(`⭐ ${catInfo?.label} এ সেভ হয়েছে!`);
+        });
+      }
+    });
   });
 
   list.querySelectorAll('.ftp-visit-btn').forEach(btn => {
@@ -1256,8 +1580,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('tabFtpSearchBtn').addEventListener('click', () => switchMainTab('ftpSearch'));
   document.getElementById('tabFtpBtn').addEventListener('click', () => switchMainTab('ftp'));
   document.getElementById('tabM3uBtn').addEventListener('click', () => switchMainTab('m3u'));
+  document.getElementById('tabFavBtn').addEventListener('click', () => switchMainTab('fav'));
 
   initM3uPanel();
+  initFavPanel();
 
   document.getElementById('scanBtn').addEventListener('click', doMediaScan);
 

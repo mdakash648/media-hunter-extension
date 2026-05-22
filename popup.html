@@ -69,6 +69,7 @@ body {
 .main-tab.ftp-search-tab.active { color: var(--accent2); border-bottom-color: var(--accent2); }
 .main-tab.ftp-tab.active { color: var(--accent4); border-bottom-color: var(--accent4); }
 .main-tab.m3u-tab.active { color: var(--accent3); border-bottom-color: var(--accent3); }
+.main-tab.fav-tab.active { color: #ffbe00; border-bottom-color: #ffbe00; }
 .main-tab { font-size: 11px; padding: 10px 3px; }
 
 /* === TAB PANELS === */
@@ -631,6 +632,169 @@ body {
 .ftp-card.visited { border-color: rgba(105,255,71,0.25); }
 .ftp-card.visited .ftp-card-url { color: var(--muted); }
 
+/* === FAVORITE BUTTON on FTP cards === */
+.ftp-fav-btn {
+  padding: 4px 8px; border-radius: 4px;
+  background: rgba(255,190,0,0.08); border: 1px solid rgba(255,190,0,0.25);
+  color: var(--accent4); font-size: 13px; cursor: pointer; transition: all 0.15s;
+  flex-shrink: 0; line-height: 1;
+}
+.ftp-fav-btn:hover { background: rgba(255,190,0,0.2); }
+.ftp-fav-btn.saved { background: rgba(255,190,0,0.2); border-color: rgba(255,190,0,0.6); color: #ffbe00; }
+
+/* === CATEGORY MODAL === */
+.cat-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+}
+.cat-modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px; width: 260px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.cat-modal-title {
+  font-size: 13px; font-weight: 700; color: var(--accent4);
+  text-align: center; letter-spacing: 1px;
+}
+.cat-modal-url {
+  font-size: 10px; color: var(--muted); text-align: center;
+  word-break: break-all; line-height: 1.4;
+}
+.cat-btn-list { display: flex; flex-direction: column; gap: 6px; }
+.cat-btn {
+  padding: 9px 14px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text);
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px;
+  cursor: pointer; text-align: left; transition: all 0.15s;
+  display: flex; align-items: center; gap: 8px;
+}
+.cat-btn:hover { border-color: var(--accent4); color: var(--accent4); background: rgba(255,190,0,0.08); }
+.cat-btn.cat-bangla:hover  { border-color: #4ade80; color: #4ade80; background: rgba(74,222,128,0.08); }
+.cat-btn.cat-english:hover { border-color: #60a5fa; color: #60a5fa; background: rgba(96,165,250,0.08); }
+.cat-btn.cat-hindi:hover   { border-color: #fb923c; color: #fb923c; background: rgba(251,146,60,0.08); }
+.cat-btn.cat-hindi-dubed:hover { border-color: #c084fc; color: #c084fc; background: rgba(192,132,252,0.08); }
+.cat-modal-cancel {
+  padding: 7px; border-radius: 7px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted);
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 12px;
+  cursor: pointer; text-align: center; transition: all 0.15s;
+}
+.cat-modal-cancel:hover { color: var(--accent2); border-color: var(--accent2); }
+
+/* === FAVORITES PANEL === */
+#panelFav { flex: 1; min-height: 0; overflow: hidden; }
+.fav-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface); flex-shrink: 0;
+}
+.fav-header-icon { font-size: 20px; }
+.fav-header-text h2 { font-size: 14px; font-weight: 700; color: var(--accent4); }
+.fav-header-text p  { font-size: 11px; color: var(--muted); }
+.fav-cat-tabs {
+  display: flex; gap: 0; background: var(--surface);
+  border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto;
+}
+.fav-cat-tab {
+  flex: 1; padding: 8px 4px; border: none; background: transparent;
+  color: var(--muted); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s; white-space: nowrap;
+}
+.fav-cat-tab.active { color: var(--accent4); border-bottom-color: var(--accent4); }
+.fav-cat-tab:hover:not(.active) { color: var(--text); }
+.fav-scroll-area { flex: 1; overflow-y: auto; min-height: 0; }
+.fav-list { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.fav-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 11px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.fav-card-url {
+  flex: 1; font-size: 11px; color: var(--text);
+  word-break: break-all; line-height: 1.4; min-width: 0;
+}
+.fav-card-actions { display: flex; gap: 5px; flex-shrink: 0; }
+.fav-copy-btn, .fav-open-btn, .fav-del-btn {
+  padding: 3px 8px; border-radius: 4px; font-size: 11px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700;
+  cursor: pointer; transition: all 0.15s;
+}
+.fav-copy-btn { background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.25); color: var(--accent); }
+.fav-copy-btn:hover { background: rgba(0,229,255,0.2); }
+.fav-open-btn { background: rgba(105,255,71,0.08); border: 1px solid rgba(105,255,71,0.25); color: var(--accent3); }
+.fav-open-btn:hover { background: rgba(105,255,71,0.2); }
+.fav-del-btn { background: rgba(255,64,129,0.08); border: 1px solid rgba(255,64,129,0.25); color: var(--accent2); }
+.fav-del-btn:hover { background: rgba(255,64,129,0.2); }
+.fav-cat-badge {
+  font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: 700; flex-shrink: 0;
+}
+.fav-cat-badge.bangla       { background: rgba(74,222,128,0.15);  color: #4ade80; }
+.fav-cat-badge.english      { background: rgba(96,165,250,0.15);  color: #60a5fa; }
+.fav-cat-badge.hindi        { background: rgba(251,146,60,0.15);  color: #fb923c; }
+.fav-cat-badge.hindi-dubed  { background: rgba(192,132,252,0.15); color: #c084fc; }
+.fav-bottom-bar {
+  background: var(--surface); border-top: 1px solid var(--border);
+  padding: 7px 11px; display: flex; gap: 7px; align-items: center; flex-shrink: 0;
+}
+.btn-clear-fav-cat {
+  padding: 6px 12px; border-radius: 6px;
+  background: rgba(255,64,129,0.08); border: 1px solid rgba(255,64,129,0.25);
+  color: var(--accent2); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer; transition: all 0.15s;
+}
+.btn-clear-fav-cat:hover { background: rgba(255,64,129,0.18); }
+.fav-count-badge {
+  margin-left: auto; font-size: 11px; color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.cat-new-row {
+  display: flex; gap: 6px; align-items: center;
+}
+.cat-new-input {
+  flex: 1; padding: 8px 10px; border-radius: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); font-family: 'Rajdhani', sans-serif;
+  font-size: 13px; outline: none;
+}
+.cat-new-input:focus { border-color: var(--accent4); }
+.cat-new-save-btn, .cat-new-cancel-btn {
+  padding: 6px 10px; border-radius: 6px; font-size: 13px;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); transition: all 0.15s;
+}
+.cat-new-save-btn:hover { border-color: var(--accent3); color: var(--accent3); }
+.cat-new-cancel-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+.cat-add-new-btn {
+  padding: 8px; border-radius: 7px;
+  background: rgba(255,190,0,0.06); border: 1px dashed rgba(255,190,0,0.35);
+  color: var(--accent4); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 12px; cursor: pointer; transition: all 0.15s;
+  text-align: center;
+}
+.cat-add-new-btn:hover { background: rgba(255,190,0,0.14); }
+.fav-add-cat-tab {
+  padding: 8px 10px !important; flex: 0 !important;
+  color: var(--accent4) !important; font-size: 14px !important;
+  border-bottom-color: transparent !important;
+}
+.fav-add-cat-tab:hover { background: rgba(255,190,0,0.1); }
+.fav-custom-cat-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 4px; margin-bottom: 4px;
+}
+.fav-custom-cat-label { font-size: 12px; color: var(--accent4); font-weight: 700; }
+.fav-del-cat-btn {
+  padding: 4px 10px; border-radius: 5px;
+  background: rgba(255,64,129,0.08); border: 1px solid rgba(255,64,129,0.3);
+  color: var(--accent2); font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 11px; cursor: pointer; transition: all 0.15s;
+  display: block; margin: 8px auto 0;
+}
+.fav-del-cat-btn:hover { background: rgba(255,64,129,0.2); }
+
 /* FTP Bottom bar */
 .ftp-bottom-bar {
   background: var(--surface); border-top: 1px solid var(--border);
@@ -821,6 +985,7 @@ body {
   <button class="main-tab ftp-search-tab" id="tabFtpSearchBtn">🔍 FTP সার্চ</button>
   <button class="main-tab ftp-tab" id="tabFtpBtn">🖥️ FTP স্ক্যান</button>
   <button class="main-tab m3u-tab" id="tabM3uBtn">📥 M3U</button>
+  <button class="main-tab fav-tab" id="tabFavBtn">⭐ ফেভারিট</button>
 </div>
 
 <!-- ===== MEDIA HUNTER PANEL ===== -->
@@ -976,6 +1141,27 @@ body {
   <div class="m3u-bottom-bar" id="m3uBottomBar">
     <button type="button" class="btn-m3u-dl-all" id="m3uDownloadAllBtn" disabled>⬇ সব Working ডাউনলোড</button>
     <div class="result-count-badge" id="m3uResultBadge">0 টি</div>
+  </div>
+</div>
+
+<!-- ===== FAVORITES PANEL ===== -->
+<div class="tab-panel" id="panelFav">
+  <div class="fav-header">
+    <div class="fav-header-icon">⭐</div>
+    <div class="fav-header-text">
+      <h2>ফেভারিট লিংক</h2>
+      <p>Category অনুযায়ী সেভ করা লিংকগুলো</p>
+    </div>
+  </div>
+  <div class="fav-cat-tabs" id="favCatTabs">
+    <!-- dynamically rendered by renderFavCatTabs() -->
+  </div>
+  <div class="fav-scroll-area">
+    <div class="fav-list" id="favList"></div>
+  </div>
+  <div class="fav-bottom-bar">
+    <button class="btn-clear-fav-cat" id="clearFavCatBtn">🗑 এই Category ক্লিয়ার</button>
+    <span class="fav-count-badge" id="favCountBadge">0 টি</span>
   </div>
 </div>
 
