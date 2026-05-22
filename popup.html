@@ -623,6 +623,13 @@ body {
   flex-shrink: 0;
 }
 .ftp-visit-btn:hover { background: rgba(0,229,255,0.2); }
+.ftp-visited-badge {
+  padding: 3px 8px; border-radius: 4px;
+  background: rgba(105,255,71,0.12); border: 1px solid rgba(105,255,71,0.3);
+  color: #69ff47; font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+.ftp-card.visited { border-color: rgba(105,255,71,0.25); }
+.ftp-card.visited .ftp-card-url { color: var(--muted); }
 
 /* FTP Bottom bar */
 .ftp-bottom-bar {
@@ -645,6 +652,14 @@ body {
   letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
 }
 .btn-clear-ftp:hover { background: rgba(255,64,129,0.18); }
+.btn-reset-visited {
+  padding: 6px 12px;
+  background: rgba(105,255,71,0.08); border: 1px solid rgba(105,255,71,0.25);
+  border-radius: 6px; color: #69ff47;
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 1px; cursor: pointer; transition: all 0.15s;
+}
+.btn-reset-visited:hover { background: rgba(105,255,71,0.18); }
 .ftp-result-badge {
   font-family: 'JetBrains Mono', monospace; font-size: 10px;
   background: var(--surface2); border: 1px solid var(--border);
@@ -922,6 +937,7 @@ body {
 
   <div class="ftp-bottom-bar" id="ftpBottomBar">
     <button class="btn-visit-all" id="ftpVisitAllBtn">🌐 সব Working লিংক ভিজিট করুন</button>
+    <button class="btn-reset-visited" id="ftpResetVisitedBtn">🔄 ভিজিটেড রিসেট</button>
     <button class="btn-clear-ftp" id="ftpClearBtn">🗑 ক্লিয়ার</button>
     <div class="ftp-result-badge" id="ftpResultBadge">0 টি</div>
   </div>

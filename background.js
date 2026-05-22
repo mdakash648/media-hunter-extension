@@ -24,6 +24,7 @@ let storageReady = false;
 
 let bulkSearchRunning = false;
 let bulkShouldStop = false;
+let bulkStoppingUi = false;
 let bulkQuery = '';
 let bulkRows = [];
 
@@ -360,8 +361,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.action === 'ftpBulkSearchStop') {
+    if (!bulkSearchRunning) {
+      sendResponse({ status: 'not_running' });
+      return true;
+    }
     bulkShouldStop = true;
-    saveBulkSearchState(false).catch(() => {});
+    bulkStoppingUi = true;
+    bulkRows.forEach((r) => {
+      if (r.status === 'scanning') r.status = 'pending';
+    });
+    saveBulkSearchState(true, { stopping: true }).catch(() => {});
+    broadcastBulkProgress();
     sendResponse({ status: 'stopping' });
     return true;
   }
@@ -369,13 +379,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'ftpBulkSearchGetStatus') {
     (async () => {
       await restoreBulkSearchState();
+      const saved = (await storageGet([STORAGE_KEY_BULK_SEARCH]).catch(() => ({})))[STORAGE_KEY_BULK_SEARCH] || {};
       sendResponse({
         rows: bulkRows,
         query: bulkQuery,
         running: bulkSearchRunning,
+        stopping: bulkStoppingUi,
         done: bulkRows.filter(r => !['pending', 'scanning'].includes(r.status)).length,
         total: bulkRows.length,
-        found: bulkRows.filter(r => r.status === 'found').length
+        found: bulkRows.filter(r => r.status === 'found').length,
+        stopped: !!saved.stopped,
+        completedAt: saved.completedAt || null
       });
     })();
     return true;
@@ -550,25 +564,29 @@ const BULK_FILE_EXT_RE = /\.(mp4|mkv|avi|mov|webm|mp3|flac|m4v|zip|rar|7z|iso|sr
 const BULK_CRAWL = { maxDepth: 15, maxFolders: 200 };
 const BULK_SEARCH_ENDPOINT_MS = 9000;
 
-async function saveBulkSearchState(running) {
-  await storageSet({
-    [STORAGE_KEY_BULK_SEARCH]: {
-      query: bulkQuery,
-      running: running !== undefined ? running : bulkSearchRunning,
-      rows: bulkRows,
-      updatedAt: new Date().toISOString()
-    }
-  }).catch((e) => console.warn('[Media Hunter] bulk search save failed:', e));
+async function saveBulkSearchState(running, extra = {}) {
+  const payload = {
+    query: bulkQuery,
+    running: running !== undefined ? running : bulkSearchRunning,
+    rows: bulkRows,
+    stopping: !!extra.stopping || bulkStoppingUi,
+    stopped: !!extra.stopped,
+    completedAt: extra.completedAt || null,
+    updatedAt: new Date().toISOString()
+  };
+  await storageSet({ [STORAGE_KEY_BULK_SEARCH]: payload })
+    .catch((e) => console.warn('[Media Hunter] bulk search save failed:', e));
 }
 
 async function restoreBulkSearchState() {
   try {
     const data = await storageGet([STORAGE_KEY_BULK_SEARCH]);
     const saved = data[STORAGE_KEY_BULK_SEARCH];
-    if (!saved?.rows?.length) return false;
+    if (!saved?.rows?.length && !saved?.running) return false;
     bulkQuery = saved.query || '';
-    bulkRows = saved.rows;
+    bulkRows = saved.rows || [];
     bulkSearchRunning = !!saved.running;
+    bulkStoppingUi = !!saved.stopping;
     return true;
   } catch {
     return false;
@@ -583,6 +601,7 @@ function broadcastBulkProgress() {
     rows: bulkRows,
     query: bulkQuery,
     running: bulkSearchRunning,
+    stopping: bulkStoppingUi,
     done,
     total: bulkRows.length,
     found
@@ -597,7 +616,18 @@ async function runBulkSearchLoop(query, startIndex = 0) {
     bulkRows[i].status = 'scanning';
     broadcastBulkProgress();
 
+    if (bulkShouldStop) {
+      bulkRows[i].status = 'pending';
+      break;
+    }
+
     const result = await searchFtpServerContent(bulkRows[i].url, query);
+
+    if (bulkShouldStop) {
+      bulkRows[i].status = 'pending';
+      break;
+    }
+
     bulkRows[i] = {
       url: bulkRows[i].url,
       status: result.status || 'error',
@@ -610,23 +640,33 @@ async function runBulkSearchLoop(query, startIndex = 0) {
     broadcastBulkProgress();
   }
 
+  const wasStopped = bulkShouldStop;
   bulkSearchRunning = false;
-  await saveBulkSearchState(false);
+  bulkShouldStop = false;
+  bulkStoppingUi = false;
+
+  await saveBulkSearchState(false, {
+    stopped: wasStopped,
+    completedAt: new Date().toISOString()
+  });
+
   broadcastToPopup({
     action: 'bulkSearchDone',
     rows: bulkRows,
     query: bulkQuery,
     running: false,
+    stopping: false,
     done: bulkRows.filter(r => !['pending', 'scanning'].includes(r.status)).length,
     total: bulkRows.length,
     found: bulkRows.filter(r => r.status === 'found').length,
-    stopped: bulkShouldStop
+    stopped: wasStopped
   });
 }
 
 async function startBulkFtpSearchJob(query, urls) {
   bulkSearchRunning = true;
   bulkShouldStop = false;
+  bulkStoppingUi = false;
   bulkQuery = query;
   bulkRows = urls.map((url) => ({
     url,
@@ -644,6 +684,7 @@ async function startBulkFtpSearchJob(query, urls) {
 async function continueBulkSearchFromPending() {
   bulkSearchRunning = true;
   bulkShouldStop = false;
+  bulkStoppingUi = false;
   const startIndex = bulkRows.findIndex((r) => r.status === 'pending');
   if (startIndex < 0) {
     bulkSearchRunning = false;
@@ -758,6 +799,7 @@ async function tryBulkSearchEndpoints(baseUrl, query) {
   const state = { visited: new Set([rootUrl]), seen: new Set(), match: null };
 
   for (const searchUrl of candidates) {
+    if (bulkShouldStop) break;
     try {
       const html = await bulkFetchFolderHtml(searchUrl, BULK_SEARCH_ENDPOINT_MS);
       bulkCollectFromHtmlToLevel(html, searchUrl, rootUrl, q, 0, state, []);
@@ -832,6 +874,10 @@ async function bulkScanOneLevel(item, rootUrl, q, state) {
 }
 
 async function searchFtpServerContent(baseUrl, query) {
+  if (bulkShouldStop) {
+    return { status: 'not_found', url: baseUrl, searchUrl: baseUrl, detail: 'stopped' };
+  }
+
   const q = String(query || '').trim().toLowerCase();
   if (!q || q.length < 2 || !/^https?:\/\//i.test(baseUrl)) {
     return { status: 'error', url: baseUrl, searchUrl: baseUrl, detail: 'bad input' };
@@ -839,6 +885,9 @@ async function searchFtpServerContent(baseUrl, query) {
 
   const endpointHit = await tryBulkSearchEndpoints(baseUrl, query);
   if (endpointHit) return endpointHit;
+  if (bulkShouldStop) {
+    return { status: 'not_found', url: baseUrl, searchUrl: baseUrl, detail: 'stopped' };
+  }
 
   const rootUrl = bulkNormalizeDirUrl(baseUrl);
   const state = {
@@ -853,11 +902,13 @@ async function searchFtpServerContent(baseUrl, query) {
 
   while (
     currentLevel.length > 0 &&
+    !bulkShouldStop &&
     state.foldersScanned < BULK_CRAWL.maxFolders &&
     !state.match
   ) {
     const nextLevel = [];
     for (const item of currentLevel) {
+      if (bulkShouldStop) break;
       if (state.foldersScanned >= BULK_CRAWL.maxFolders || state.match) break;
       const children = await bulkScanOneLevel(item, rootUrl, q, state);
       for (const child of children) {

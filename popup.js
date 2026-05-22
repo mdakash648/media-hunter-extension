@@ -704,6 +704,28 @@ function renderSearchResults(results, query, meta = {}) {
 // ===========================
 let ftpCurrentFilter = 'ALL';
 let ftpResultsCache = {};
+let visitedFtpUrls = new Set();
+
+function loadVisitedFtpUrls() {
+  chrome.storage.local.get(['ftpVisitedUrls'], (data) => {
+    if (!chrome.runtime.lastError && Array.isArray(data.ftpVisitedUrls)) {
+      visitedFtpUrls = new Set(data.ftpVisitedUrls);
+    }
+    renderFtpList();
+  });
+}
+
+function saveVisitedFtpUrl(url) {
+  visitedFtpUrls.add(url);
+  chrome.storage.local.set({ ftpVisitedUrls: [...visitedFtpUrls] });
+}
+
+function resetVisitedFtpUrls() {
+  visitedFtpUrls = new Set();
+  chrome.storage.local.remove('ftpVisitedUrls');
+  renderFtpList();
+  showToast('🔄 ভিজিটেড রিসেট হয়েছে');
+}
 
 function applyFtpSavedData(data) {
   if (!data) return false;
@@ -774,6 +796,7 @@ function loadFtpDirectFromStorage(callback) {
 }
 
 function initFtpPanel() {
+  loadVisitedFtpUrls();
   loadFtpDirectFromStorage((directOk) => {
     if (directOk) return;
 
@@ -908,18 +931,33 @@ function renderFtpList() {
   list.innerHTML = '';
   filtered.forEach(([url, info]) => {
     const card = document.createElement('div');
-    card.className = `ftp-card status-${info.status}`;
+    const isVisited = visitedFtpUrls.has(url);
+    card.className = `ftp-card status-${info.status}${isVisited ? ' visited' : ''}`;
     const statusLabels = { working: '✅ Working', dead: '❌ Dead', scanning: '🔄 Scanning', pending: '⏳ Pending' };
     card.innerHTML = `
       <div class="ftp-status-dot ${info.status}"></div>
       <span class="ftp-card-url">${url}</span>
       <span class="ftp-card-status ${info.status}">${statusLabels[info.status] || info.status}</span>
+      ${isVisited ? `<span class="ftp-visited-badge">✔ ভিজিটেড</span>` : ''}
       ${info.status === 'working' ? `<button class="ftp-visit-btn" data-url="${url}">🌐 ভিজিট</button>` : ''}`;
     list.appendChild(card);
   });
 
   list.querySelectorAll('.ftp-visit-btn').forEach(btn => {
-    btn.addEventListener('click', () => chrome.tabs.create({ url: btn.dataset.url }));
+    btn.addEventListener('click', () => {
+      const url = btn.dataset.url;
+      saveVisitedFtpUrl(url);
+      chrome.tabs.create({ url });
+      // UI তে সাথে সাথে visited দেখাও
+      const card = btn.closest('.ftp-card');
+      if (card && !card.classList.contains('visited')) {
+        card.classList.add('visited');
+        const badge = document.createElement('span');
+        badge.className = 'ftp-visited-badge';
+        badge.textContent = '✔ ভিজিটেড';
+        btn.before(badge);
+      }
+    });
   });
 }
 
@@ -1285,13 +1323,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('ftpVisitAllBtn').addEventListener('click', () => {
     const working = Object.entries(ftpResultsCache).filter(([, info]) => info.status === 'working');
     if (working.length === 0) { showToast('কোনো working সার্ভার নেই'); return; }
-    working.forEach(([url]) => chrome.tabs.create({ url }));
+    working.forEach(([url]) => {
+      saveVisitedFtpUrl(url);
+      chrome.tabs.create({ url });
+    });
     showToast(`✅ ${working.length} টি সার্ভার খোলা হচ্ছে...`);
   });
+
+  document.getElementById('ftpResetVisitedBtn')?.addEventListener('click', resetVisitedFtpUrls);
 
   document.getElementById('ftpClearBtn').addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'ftpClearData' });
     ftpResultsCache = {};
+    visitedFtpUrls = new Set();
+    chrome.storage.local.remove('ftpVisitedUrls');
     document.getElementById('ftpProgressBar').style.width = '0%';
     document.getElementById('ftpProgressText').textContent = '0/0';
     document.getElementById('ftpLastScan').innerHTML = `শেষ স্ক্যান: <span>কখনো না</span>`;
