@@ -2,7 +2,57 @@
 // MEDIA HUNTER - Background Service Worker
 // FTP scan — chrome.storage.local + IndexedDB (Android/Kiwi)
 // ============================================================
-importScripts('searchUtils.js');
+// === searchUtils.js inlined (importScripts কাজ করে না MV3 service worker এ) ===
+const FTP_SEARCH_ENDPOINTS = [
+  { path: 'movie/search', param: 'search' },
+  { path: 'search', param: 'q' },
+  { path: 'search', param: 'keyword' },
+  { path: 'search', param: 'search' },
+  { path: 'search', param: 'query' },
+  { path: 'movies/search', param: 'search' },
+  { path: 'movies/search', param: 'q' },
+  { path: 'movie/search', param: 'q' }
+];
+
+function normalizeFtpRootUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!u.pathname.endsWith('/')) {
+      const last = u.pathname.split('/').pop() || '';
+      if (last.includes('.') && !last.endsWith('/')) {
+        u.pathname = u.pathname.slice(0, u.pathname.lastIndexOf('/') + 1);
+      } else {
+        u.pathname += '/';
+      }
+    }
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+function buildFtpSearchUrlCandidates(baseUrl, query) {
+  const encoded = encodeURIComponent(String(query || '').trim());
+  if (!encoded) return [];
+  const dir = normalizeFtpRootUrl(baseUrl);
+  const out = [];
+  try {
+    const root = new URL(dir);
+    for (const { path, param } of FTP_SEARCH_ENDPOINTS) {
+      const u = new URL(root.href);
+      if (path) {
+        const basePath = u.pathname.replace(/\/$/, '');
+        u.pathname = `${basePath}/${path}`.replace(/\/+/g, '/');
+      }
+      u.search = `${param}=${encoded}`;
+      out.push(u.href);
+    }
+  } catch {
+    return [];
+  }
+  return [...new Set(out)];
+}
+// === end searchUtils inline ===
 
 const SERVER_LIST_URL = 'https://raw.githubusercontent.com/mdakash648/media-hunter-extension/main/serverList.json';
 const STORAGE_KEY = 'ftpScanData';
@@ -333,6 +383,52 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // Protection check: HEAD without referrer, then HEAD with referrer
+  if (msg.action === 'checkMediaLinkWithReferrer') {
+    checkMediaLinkWithReferrer(msg.url, msg.referrer)
+      .then(result => sendResponse(result))
+      .catch(() => sendResponse({ protected: false, referrerNeeded: false, detail: 'error' }));
+    return true;
+  }
+
+  // Download এর আগে Referer rule set করো
+  // Smart download check — HEAD দিয়ে protection auto-detect
+  if (msg.action === 'smartDownloadCheck') {
+    (async () => {
+      try {
+        const result = await smartDownloadCheck(msg.url, msg.referrer || '');
+        // referrer mode হলে DNR rule set করো
+        if ((result.mode === 'referrer' || result.mode === 'force') && result.referrer) {
+          await setDownloadReferrerRule(msg.url, result.referrer);
+          result.ruleSet = true;
+        } else if (result.mode === 'direct' || result.mode === 'force') {
+          // Direct mode: শুধু UA inject (referrer ছাড়া)
+          await setDownloadReferrerRule(msg.url, null);
+          result.ruleSet = true;
+        }
+        sendResponse(result);
+      } catch (e) {
+        sendResponse({ mode: 'force', referrer: null, status: 0, detail: e.message, ruleSet: false });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.action === 'setDownloadReferrer') {
+    setDownloadReferrerRule(msg.url, msg.referrer)
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  // Download শেষে rule clear করো
+  if (msg.action === 'clearDownloadReferrer') {
+    clearDownloadReferrerRule()
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   if (msg.action === 'ftpBulkSearchStart') {
     (async () => {
       if (bulkSearchRunning) {
@@ -499,7 +595,211 @@ function isAliveHttpStatus(status) {
   return status !== 404 && status !== 410;
 }
 
-/** M3U মিডিয়া লিংক — দ্রুত HEAD (~1s) */
+/**
+ * M3U মিডিয়া লিংক — দ্রুত HEAD (~1s)
+ * Protection detect করে: প্রথমে referrer ছাড়া, তারপর referrer দিয়ে চেক
+ */
+async function checkMediaLinkWithReferrer(url, referrer) {
+  if (!/^https?:\/\//i.test(url)) {
+    return { protected: false, referrerNeeded: false, reachable: false, detail: 'bad URL' };
+  }
+
+  // Step 1: Referrer ছাড়া HEAD request
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'HEAD',
+      timeout: FAST_HEAD_MS,
+      headers: {}
+    });
+
+    // সরাসরি 200/206 → protection নেই
+    if (res.status === 200 || res.status === 206 || res.status === 416) {
+      return { protected: false, referrerNeeded: false, reachable: true, status: res.status, detail: 'direct OK' };
+    }
+
+    // 403/401 → protection সম্ভব, referrer দিয়ে চেক করো
+    if ((res.status === 403 || res.status === 401 || res.status === 302) && referrer) {
+      const res2 = await fetchWithTimeout(url, {
+        method: 'HEAD',
+        timeout: FAST_HEAD_MS,
+        headers: { 'Referer': referrer }
+      });
+      if (res2.status === 200 || res2.status === 206 || res2.status === 416) {
+        return { protected: true, referrerNeeded: true, reachable: true, status: res2.status, detail: 'referrer bypass OK' };
+      }
+      // Referrer দিয়েও কাজ না হলে — তবুও try করবে
+      return { protected: true, referrerNeeded: true, reachable: false, status: res2.status, detail: 'referrer bypass uncertain' };
+    }
+
+    // 404/410 → dead link
+    if (res.status === 404 || res.status === 410) {
+      return { protected: false, referrerNeeded: false, reachable: false, status: res.status, detail: 'not found' };
+    }
+
+    // অন্য status → assume direct OK
+    return { protected: false, referrerNeeded: false, reachable: true, status: res.status, detail: 'OK' };
+
+  } catch {
+    // Network error বা CORS → direct download try করবে
+    return { protected: false, referrerNeeded: false, reachable: true, detail: 'network error, try direct' };
+  }
+}
+
+// ============================================================
+// declarativeNetRequest — dynamic Referer + UA injection
+// ============================================================
+const DNR_RULE_ID = 9901;
+const DNR_RULE_ID_2 = 9902;
+
+const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+async function setDownloadReferrerRule(downloadUrl, referrer) {
+  if (!downloadUrl) return;
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [DNR_RULE_ID, DNR_RULE_ID_2]
+    });
+
+    let urlFilter;
+    try {
+      const u = new URL(downloadUrl);
+      // exact path match — CDN এর অন্য paths এ interference এড়ানো
+      urlFilter = `${u.protocol}//${u.host}${u.pathname}`;
+    } catch {
+      urlFilter = downloadUrl;
+    }
+
+    const requestHeaders = [
+      { header: 'User-Agent', operation: 'set', value: DEFAULT_UA }
+    ];
+    if (referrer) {
+      requestHeaders.push({ header: 'Referer', operation: 'set', value: referrer });
+    }
+
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      addRules: [{
+        id: DNR_RULE_ID,
+        priority: 10,
+        action: {
+          type: 'modifyHeaders',
+          requestHeaders
+        },
+        condition: {
+          urlFilter,
+          resourceTypes: ['xmlhttprequest', 'media', 'other', 'main_frame', 'sub_frame', 'object']
+        }
+      }]
+    });
+  } catch (e) {
+    console.warn('[Media Hunter] DNR rule set failed:', e);
+  }
+}
+
+async function clearDownloadReferrerRule() {
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [DNR_RULE_ID, DNR_RULE_ID_2]
+    });
+  } catch (e) {
+    console.warn('[Media Hunter] DNR rule clear failed:', e);
+  }
+}
+
+// ============================================================
+// Smart Download Check — HEAD দিয়ে protection detect করো
+// return: { mode: 'direct'|'referrer'|'origin_referrer'|'force',
+//           referrer: string|null, status: number }
+// ============================================================
+const CHECK_TIMEOUT = 6000;
+
+async function smartDownloadCheck(mediaUrl, pageReferrer) {
+  if (!/^https?:\/\//i.test(mediaUrl)) {
+    return { mode: 'direct', referrer: null, status: 0, detail: 'non-http' };
+  }
+
+  // ধাপ ১: referrer ছাড়া HEAD — সরাসরি accessible?
+  try {
+    const r1 = await fetchWithTimeout(mediaUrl, {
+      method: 'HEAD',
+      timeout: CHECK_TIMEOUT,
+      headers: { 'User-Agent': DEFAULT_UA }
+    });
+
+    // 200/206/416 = direct OK
+    if ([200, 206, 416].includes(r1.status)) {
+      return { mode: 'direct', referrer: null, status: r1.status, detail: 'direct OK' };
+    }
+
+    // 404/410 = dead link
+    if ([404, 410].includes(r1.status)) {
+      return { mode: 'dead', referrer: null, status: r1.status, detail: 'not found' };
+    }
+
+    // 403/401/406 = protection আছে — referrer দিয়ে চেক
+    if ([401, 403, 406].includes(r1.status) || r1.status >= 400) {
+      return await checkWithReferrers(mediaUrl, pageReferrer, r1.status);
+    }
+
+    // 3xx redirect বা অন্যান্য — direct try করা যাক
+    return { mode: 'direct', referrer: null, status: r1.status, detail: 'redirect/other' };
+
+  } catch (e) {
+    // Network error / CORS block — page referrer দিয়ে try
+    if (pageReferrer) {
+      return await checkWithReferrers(mediaUrl, pageReferrer, 0);
+    }
+    // কোনো referrer নেই — direct force করো
+    return { mode: 'force', referrer: null, status: 0, detail: 'network error, force direct' };
+  }
+}
+
+async function checkWithReferrers(mediaUrl, pageReferrer, prevStatus) {
+  const candidates = [];
+
+  // candidate 1: exact page URL (যে পেজ থেকে লিংক পাওয়া গেছে)
+  if (pageReferrer) candidates.push(pageReferrer);
+
+  // candidate 2: origin only (e.g. https://site.com/)
+  try {
+    const origin = new URL(pageReferrer || mediaUrl).origin + '/';
+    if (origin !== pageReferrer) candidates.push(origin);
+  } catch {}
+
+  // candidate 3: media URL এর নিজের origin (CDN self-referrer)
+  try {
+    const mediaOrigin = new URL(mediaUrl).origin + '/';
+    if (!candidates.includes(mediaOrigin)) candidates.push(mediaOrigin);
+  } catch {}
+
+  for (const ref of candidates) {
+    try {
+      const r = await fetchWithTimeout(mediaUrl, {
+        method: 'HEAD',
+        timeout: CHECK_TIMEOUT,
+        headers: {
+          'Referer': ref,
+          'User-Agent': DEFAULT_UA
+        }
+      });
+
+      if ([200, 206, 416].includes(r.status)) {
+        return { mode: 'referrer', referrer: ref, status: r.status, detail: `referrer OK: ${ref}` };
+      }
+    } catch {
+      /* পরেরটা চেষ্টা */
+    }
+  }
+
+  // কোনো referrer কাজ করেনি — প্রথম page referrer দিয়েই force download
+  return {
+    mode: pageReferrer ? 'referrer' : 'force',
+    referrer: pageReferrer || null,
+    status: prevStatus,
+    detail: 'referrer check inconclusive, using best guess'
+  };
+}
+
+
 async function checkMediaLink(url) {
   if (!/^https?:\/\//i.test(url)) {
     return { working: false, method: '', status: 0, detail: 'bad URL' };

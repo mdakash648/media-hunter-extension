@@ -460,13 +460,15 @@ function searchInPage(query) {
 function scanPageForMedia() {
   const found = new Map();
   const urlRegex = /https?:\/\/[^\s"'<>(){}[\]\\]+/gi;
+  // এই page-এর URL টা সব media item-এর referrer হবে
+  const pageReferrer = location.href;
 
   const add = (url) => {
     if (!url || url.length < 8) return;
     try { url = new URL(url, location.href).href; } catch { return; }
     const type = classifyUrl(url);
     if (type && !found.has(url)) {
-      found.set(url, { url, type, name: extractFilename(url) });
+      found.set(url, { url, type, name: extractFilename(url), referrer: pageReferrer });
     }
   };
 
